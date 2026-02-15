@@ -1,3 +1,18 @@
+# /// script
+# [project]
+# name = "ifbs-evaluation"
+# version = "0.1.0"
+# description = "Notebook for extracting data from .mpr files for the Interlaboratory Study – Phase 2b"
+# requires-python = ">=3.12"
+# dependencies = [
+#     "marimo[recommended]>=0.19.11",
+#     "galvani>=0.4.1",
+# ]
+#
+# [tool.marimo.runtime]
+# output_max_bytes = 30_000_000
+# ///
+
 import marimo
 
 __generated_with = "0.19.11"
