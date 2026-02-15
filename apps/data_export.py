@@ -8,13 +8,19 @@ app = marimo.App(width="medium")
 def _():
     import io, json
     import marimo as mo
-    from galvani.BioLogic import MPRfile
-    import polars as pl
     from datetime import datetime
     # from pathlib import Path
     #import altair as alt
-    return MPRfile, io, json, mo, pl
+    import micropip
+    return io, json, mo, micropip, datetime
 
+@app.cell
+def _():
+    await micropip.install("polars")
+    await micropip.install("galvani")
+    from galvani.BioLogic import MPRfile
+    import polars as pl
+    return MPRfile, pl
 
 @app.cell
 def _(mo):
