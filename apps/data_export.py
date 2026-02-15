@@ -1,5 +1,4 @@
 # /// script
-# [project]
 # name = "ifbs-evaluation"
 # version = "0.1.0"
 # description = "Notebook for extracting data from .mpr files for the Interlaboratory Study – Phase 2b"
@@ -7,6 +6,7 @@
 # dependencies = [
 #     "marimo[recommended]>=0.19.11",
 #     "galvani>=0.4.1",
+#     "polars>=0.19.0"
 # ]
 #
 # [tool.marimo.runtime]
@@ -26,16 +26,9 @@ def _():
     from datetime import datetime
     # from pathlib import Path
     #import altair as alt
-    import micropip
-    return io, json, mo, micropip, datetime
-
-@app.cell
-def _():
-    await micropip.install("polars")
-    await micropip.install("galvani")
     from galvani.BioLogic import MPRfile
     import polars as pl
-    return MPRfile, pl
+    return io, json, mo, pl, datetime, MPRfile
 
 @app.cell
 def _(mo):
