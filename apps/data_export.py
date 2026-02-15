@@ -88,8 +88,9 @@ def _(mo):
             """
             ### **Step 1** – Import experimental data
 
-            Please select the experiment type and the corresponding `.mpr` file to load the data. 
-            The file should be located in the `data/phase_2b` subfolder of this repository.
+            Please select the experiment type and open the corresponding `.mpr` file on your system to load the data. 
+            There are no checks implemented in this notebook to verify whether the correct experiment type is selected for a given file, 
+            so please make sure to select the correct experiment type for the file you are loading. 
 
             **Experiment type**  
             {experiment}
