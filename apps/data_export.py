@@ -416,9 +416,7 @@ def _(json, mo, step2_form, text):
         </div>
 
         <!-- Right side -->
-        <button
-          id="copy"
-          style="
+        <button id="copy" style="
             min-width: 170px;
             padding: 10px 15px;
             background: #F2F5F9;
@@ -426,8 +424,7 @@ def _(json, mo, step2_form, text):
             border-radius: 6px;
             cursor: pointer;
             font-size: 14px;
-          "
-        >
+        ">
           Copy to clipboard
         </button>
 
