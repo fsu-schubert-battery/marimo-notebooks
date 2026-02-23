@@ -7,7 +7,8 @@
 #     "marimo[recommended]>=0.19.11",
 #     "galvani>=0.4.1",
 #     "yadg>=6.2.0",
-#     "polars>=0.19.0"
+#     "polars>=0.19.0",
+#     "PyGithub>=2.0"
 # ]
 #
 # [tool.marimo.runtime]
@@ -24,6 +25,7 @@ app = marimo.App(
 
 with app.setup:
     import marimo as mo
+    import sys
     from pathlib import Path
     from typing import Any, Optional
     from datetime import datetime
@@ -44,6 +46,10 @@ with app.setup:
     import altair as alt
 
     alt.data_transformers.enable("vegafusion")
+
+    # detect WASM runtime (deployed Marimo notebook on GitHub Pages)
+    def is_wasm() -> bool:
+        return "pyodide" in sys.modules
 
 
 @app.cell(hide_code=True)
@@ -95,11 +101,33 @@ def _():
         _, settings = mpr_extract_metadata(path, filetype)
         return settings.get("technique", None)
 
+    # If file_path is a URL (WASM / GitHub Pages), download it to a local
+    # temporary file so that all downstream I/O (galvani, yadg, polars) works
+    # unchanged.  The temp file is kept for the lifetime of the session;
+    # @mo.persistent_cache ensures each URL is only fetched once.
+    #
+    # In Pyodide (WASM) urllib.request is monkey-patched to use the browser
+    # Fetch API under the hood, so this works in both environments.
+    # raw.githubusercontent.com serves Access-Control-Allow-Origin: * so
+    # CORS is not an issue.
+    def _ensure_local(file_path):
+        _path_str = str(file_path)
+        if _path_str.startswith(("http://", "https://")):
+            import urllib.request
+            _suffix = Path(_path_str.split("?")[0].split("/")[-1]).suffix
+            _fd = tempfile.NamedTemporaryFile(suffix=_suffix, delete=False)
+            with urllib.request.urlopen(_path_str) as _resp:
+                _fd.write(_resp.read())
+            _fd.close()
+            return Path(_fd.name)
+        return file_path
+
     # Load a dataframe from a file, cached to disk per (file_path, technique_filter) pair.
     # Data files are write-once (never change after creation), so content-based
     # cache invalidation is unnecessary.
     @mo.persistent_cache
     def load_file(file_path, technique_filter=None):
+        file_path = _ensure_local(file_path)
         with open(file_path, "rb") as f:
             if file_path.suffix == ".mpr":
                 if technique_filter is not None:
@@ -497,44 +525,115 @@ def _():
     # │   │   ├── [...]
     # ├── phase_2/
     # │   ├── [...]
-    data_dir = Path("public/data/")
 
-    # based on the folder structure create a dataframe with the following columns:
-    # phase, participant, repetition, flow_rate, type, file_name, file_path
-    data_structure_df = pl.DataFrame(
-        [
-            {
-                "study_phase": study_phase.name,
-                "participant": p.name,
-                "repetition": r.name,
-                "flow_rate": f.name,
-                "type": t.name,
-                "file_path": file,
-            }
-            for study_phase in data_dir.iterdir()
-            if study_phase.is_dir() and not study_phase.name.startswith(".")
-            for p in study_phase.iterdir()
-            if p.is_dir() and not p.name.startswith(".")
-            for r in p.iterdir()
-            if r.is_dir() and (not r.name.startswith(".") and not "fail" in r.name)
-            for f in r.iterdir()
-            if f.is_dir() and not f.name.startswith(".")
-            for t in f.iterdir()
-            if t.is_dir() and not t.name.startswith(".")
-            for file in t.iterdir()
-            if file.is_file()
-            and not file.name.startswith(".")
-            and file.suffix in [".mpr", ".csv"]
-        ],
-        schema={
-            "study_phase": pl.String,
-            "participant": pl.String,
-            "repetition": pl.Int16,
-            "flow_rate": pl.Float64,
-            "type": pl.String,
-            "file_path": pl.Object,
-        },
-    )
+    if is_wasm():
+        # ── WASM / GitHub Pages ──────────────────────────────────────────────
+        # Cannot iterate server directories; discover files via the GitHub
+        # Tree API (single API call for the entire recursive listing).
+        from github import Github
+        from urllib.parse import quote
+
+        GITHUB_REPO = "fsu-schubert-battery/marimo-notebooks"
+        GITHUB_BRANCH = "main"
+        GITHUB_DATA_PATH = "notebooks/public/data"
+        ALLOWED_SUFFIXES = {".mpr"}
+
+        _g = Github()  # unauthenticated – public repo (60 requests / h)
+        _repo = _g.get_repo(GITHUB_REPO)
+        _branch = _repo.get_branch(GITHUB_BRANCH)
+        _tree = _repo.get_git_tree(_branch.commit.sha, recursive=True)
+
+        _entries = []
+        for _elem in _tree.tree:
+            if _elem.type != "blob":
+                continue
+            if not _elem.path.startswith(GITHUB_DATA_PATH + "/"):
+                continue
+
+            _rel_path = _elem.path[len(GITHUB_DATA_PATH) + 1 :]
+            _parts = _rel_path.split("/")
+
+            # Expected depth: study_phase / participant / repetition / flow_rate / type / filename
+            if len(_parts) != 6:
+                continue
+
+            _filename = _parts[-1]
+            _suffix = Path(_filename).suffix
+            if _suffix not in ALLOWED_SUFFIXES or _filename.startswith("."):
+                continue
+            if "fail" in _parts[2]:
+                continue
+
+            _download_url = (
+                f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}/"
+                + quote(_elem.path, safe="/")
+            )
+            _entries.append(
+                {
+                    "study_phase": _parts[0],
+                    "participant": _parts[1],
+                    "repetition": _parts[2],
+                    "flow_rate": _parts[3],
+                    "type": _parts[4],
+                    "file_path": _download_url,
+                }
+            )
+
+        _g.close()
+
+        data_structure_df = pl.DataFrame(
+            _entries,
+            schema={
+                "study_phase": pl.String,
+                "participant": pl.String,
+                "repetition": pl.Int16,
+                "flow_rate": pl.Float64,
+                "type": pl.String,
+                "file_path": pl.Object,
+            },
+        )
+
+    else:
+        # ── Local filesystem ─────────────────────────────────────────────────
+        data_dir = Path(str(mo.notebook_location() / "public" / "data"))
+
+        # based on the folder structure create a dataframe with the following columns:
+        # phase, participant, repetition, flow_rate, type, file_name, file_path
+        data_structure_df = pl.DataFrame(
+            [
+                {
+                    "study_phase": study_phase.name,
+                    "participant": p.name,
+                    "repetition": r.name,
+                    "flow_rate": f.name,
+                    "type": t.name,
+                    "file_path": file,
+                }
+                for study_phase in data_dir.iterdir()
+                if study_phase.is_dir() and not study_phase.name.startswith(".")
+                for p in study_phase.iterdir()
+                if p.is_dir() and not p.name.startswith(".")
+                for r in p.iterdir()
+                if r.is_dir()
+                and (not r.name.startswith(".") and "fail" not in r.name)
+                for f in r.iterdir()
+                if f.is_dir() and not f.name.startswith(".")
+                for t in f.iterdir()
+                if t.is_dir() and not t.name.startswith(".")
+                for file in t.iterdir()
+                if file.is_file()
+                and not file.name.startswith(".")
+                and file.suffix in [".mpr", ".csv"]
+            ],
+            schema={
+                "study_phase": pl.String,
+                "participant": pl.String,
+                "repetition": pl.Int16,
+                "flow_rate": pl.Float64,
+                "type": pl.String,
+                "file_path": pl.Object,
+            },
+        )
 
     # sort the dataframe
     data_structure_df = data_structure_df.sort(
