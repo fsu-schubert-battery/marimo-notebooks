@@ -873,6 +873,7 @@ def _(temperature_data_df):
             height=150,
         )
     )
+    temperature_time_chart
     return (temperature_time_chart,)
 
 
@@ -991,1956 +992,1957 @@ def _(
             disable=True,
         )
     )
+    combined_temperature_chart
     return (combined_temperature_chart,)
 
 
-@app.cell
-def _(combined_temperature_chart, temperature_data_df):
-    # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
-    # STEP 3: Display the content of the section and explain what it does
-
-    mo.vstack(
-        [
-            mo.md("## Participant schedules and temperature data"),
-            mo.md("""
-                This section displays the participant schedules and the temperature data recorded during the experiments. It was recorded by a Voltcraft DL-200T temperature logger at a sampling rate of one measurement every 60 s. The sensor was positioned at a central spot on a shelf within the laboratory (approximately 1 – 1.5 m away from each of the RFB experiments).
-            """),
-            mo.md("<br>"),
-            mo.md("### Raw data exploration"),
-            mo.md("""
-                The expandable sections enables you to explore the raw temperature data in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
-            """),
-            mo.accordion(
-                {
-                    "Data table": temperature_data_df,
-                    "Data explorer": mo.ui.data_explorer(temperature_data_df),
-                },
-                lazy=True,
-                multiple=True,
-            ),
-            mo.md("<br>"),
-            mo.md("### Participant schedules and temperature over time"),
-            mo.md(
-                f"""
-                The plot shows the participant schedules and the temperature data over time. You can use this plot to analyze the temperature behavior during the experiments and identify trends or differences between different time periods. The **average temperature** over the recorded time period was **{temperature_data_df["temperature/°C"].mean():.1f} °C ± {(temperature_data_df["temperature/°C"].std() if len(temperature_data_df) > 1 else 0):.1f} °C** (uncertainty: standard deviation) with a **minimum temperature of {temperature_data_df["temperature/°C"].min()} °C** and **maximum temperature of {temperature_data_df["temperature/°C"].max()} °C**.
-                """
-            )
-            if not temperature_data_df.is_empty()
-            else mo.md(
-                "No temperature data is currently available for the selected study phase."
-            ),
-            mo.md("<br>"),
-            combined_temperature_chart,
-        ]
-    )
-    return
-
-
-@app.cell
-def _(data_structure_df, load_file, load_precomputed_df):
-    # IMPEDANCE SPECTROSCOPY EVALUATION
-    # STEP 1a: Load ALL EIS files from the full data_structure_df into a single flat DataFrame.
-    # Filtering by UI selectors is applied later at chart/computation time.
-
-    if is_wasm():
-        eis_flat_df = load_precomputed_df("eis_flat_df")
-    else:
-        # filter out impedance spectroscopy files from the full (unfiltered) structure
-        _df_eis = data_structure_df.filter(pl.col("technique") == "01 eis")
-
-        # load each file (cached via @mo.persistent_cache) and concatenate
-        # into a single flat DataFrame with metadata columns
-        _frames = []
-        for _row in _df_eis.iter_rows(named=True):
-            try:
-                _data = load_file(_row["file_path"], ["PEIS", "GEIS"])
-            except Exception as e:
-                print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
-                continue
-            if _data is not None:
-                # rename columns to have consistent naming across files
-                _data = _data.rename(
-                    {
-                        "cycle number": "cycle",
-                    },
-                    strict=False,
-
-                )
-
-                _frames.append(
-                    _data.with_columns(
-                        pl.lit(_row["study_phase"]).alias("study_phase"),
-                        pl.lit(_row["participant"]).alias("participant"),
-                        pl.lit(_row["repetition"]).alias("repetition"),
-                        pl.lit(_row["flow_rate"]).alias("flow_rate"),
-                        # shift study_phase, etc. to the leftmost position for easier access later on
-                    ).select(
-                        [
-                            "study_phase",
-                            "participant",
-                            "repetition",
-                            "flow_rate",
-                            *[
-                                col
-                                for col in _data.columns
-                                if col
-                                not in [
-                                    "study_phase",
-                                    "participant",
-                                    "repetition",
-                                    "flow_rate",
-                                ]
-                            ],
-                        ]
-                    )
-                )
-
-        eis_flat_df = (
-            pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
-        )
-    return (eis_flat_df,)
-
-
-@app.cell
-def _(
-    eis_flat_df,
-    flow_rate_selector,
-    participant_selector,
-    recalculate_time,
-    repetition_selector,
-    study_phase_selector,
-):
-    # IMPEDANCE SPECTROSCOPY EVALUATION
-    # STEP 1b: Filter the EIS data according to the UI selectors
-
-    # apply UI filter to the flat EIS DataFrame
-    eis_filtered_df = eis_flat_df.filter(
-        pl.col("study_phase").is_in([study_phase_selector.value])
-        & pl.col("participant").is_in(participant_selector.value)
-        & pl.col("repetition").is_in(repetition_selector.value)
-        & pl.col("flow_rate").is_in(flow_rate_selector.value)
-    )
-    mo.stop(
-        eis_filtered_df.is_empty(),
-    )
-
-    # recalculate time/s from datetime column for each group (study_phase, participant, repetition, flow_rate)
-    # NOTE: We do this to properly handle multiple files in one experiment folder and then keep only the last cycle in the next step
-    eis_filtered_df = recalculate_time(eis_filtered_df)
-
-    # keep only the last cycle of each group
-    eis_filtered_df = (
-
-        eis_filtered_df.with_columns(
-            pl.col("cycle").max().over(
-                "study_phase", 
-                "participant", 
-                "repetition", 
-                "flow_rate"
-            )
-            .alias("max_cycle")
-        ).filter(
-            pl.col("cycle") == pl.col("max_cycle")
-        ).drop("max_cycle")
-    )
-    return (eis_filtered_df,)
-
-
-@app.cell
-def _(eis_filtered_df, wheel_zoom_x, wheel_zoom_xy, wheel_zoom_y):
-    # IMPEDANCE SPECTROSCOPY EVALUATION
-    # STEP 2: Plot the Nyquist plots for the selected files
-
-    # compute per-axis data ranges, then build centered domains with equal span
-    _re_min = eis_filtered_df["Re(Z)/Ohm"].min()
-    _re_max = eis_filtered_df["Re(Z)/Ohm"].max()
-    _im_min = eis_filtered_df["-Im(Z)/Ohm"].min()
-    _im_max = eis_filtered_df["-Im(Z)/Ohm"].max()
-
-    # use the larger of the two ranges so both axes cover the same span
-    _re_range = _re_max - _re_min
-    _im_range = _im_max - _im_min
-    _max_range = max(_re_range, _im_range)
-    _padding = _max_range * 0.05
-
-    # center each axis's domain around its own midpoint
-    _re_mid = (_re_min + _re_max) / 2
-    _im_mid = (_im_min + _im_max) / 2
-    _half = (_max_range / 2) + _padding
-    _re_domain = [_re_mid - _half, _re_mid + _half]
-    _im_domain = [_im_mid - _half, _im_mid + _half]
-
-    # create selectors and bind them to the legend
-    _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
-    _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
-    _flow_rate_selection = alt.selection_point(fields=["flow_rate"], bind="legend")
-
-    # select only columns needed for the chart
-    _chart_data = eis_filtered_df.select(
-        [
-            "study_phase",
-            "participant",
-            "repetition",
-            "flow_rate",
-            "cycle",
-            "Re(Z)/Ohm",
-            "-Im(Z)/Ohm",
-            "freq/Hz",
-        ]
-    )
-
-    # build Nyquist plot from single flat DataFrame
-    nyquist_plots = (
-        (
-            alt.Chart(_chart_data)
-            .mark_point()
-            .encode(
-                x=alt.X(
-                    "Re(Z)/Ohm:Q",
-                    title="Re(Z) / Ω",
-                    scale=alt.Scale(domain=_re_domain),
-                ),
-                y=alt.Y(
-                    "-Im(Z)/Ohm:Q",
-                    title="-Im(Z) / Ω",
-                    scale=alt.Scale(domain=_im_domain),
-                ),
-                color=alt.Color("participant:N", title="Participant"),
-                shape=alt.Shape("repetition:N", title="Repetition"),
-                size=alt.Size(
-                    "flow_rate:N",
-                    title="Flow Rate (mL min⁻¹)",
-                    scale=alt.Scale(range=[30, 150]),
-                ),
-                opacity=alt.condition(
-                    _participant_selection
-                    & _repetition_selection
-                    & _flow_rate_selection,
-                    alt.value(1.0),
-                    alt.value(0.025),
-                ),
-                tooltip=[
-                    "study_phase:O",
-                    "participant:N",
-                    "repetition:O",
-                    "flow_rate:O",
-                    "cycle:O",
-                    alt.Tooltip("freq/Hz:Q", format=".1f"),
-                    "Re(Z)/Ohm:Q",
-                    "-Im(Z)/Ohm:Q",
-                ],
-            )
-            .properties(
-                title="Nyquist Plot",
-                width=400,
-                height=400,
-            )
-            .add_params(
-                _participant_selection,
-                _repetition_selection,
-                _flow_rate_selection,
-            )
-        )
-        .properties(
-            title=alt.TitleParams(
-                text="Figure 1. Nyquist plots for selected participants and repetitions",
-                subtitle="Nyquist plots showing the real and imaginary parts of the impedance for each selected file.",
-                anchor="start",
-                orient="top",
-                offset=20,
-            )
-        )
-        .interactive()
-        .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
-    )
-    return (nyquist_plots,)
-
-
-@app.cell
-def _(eis_filtered_df, get_x_intercepts):
-    # IMPEDANCE SPECTROSCOPY EVALUATION
-    # STEP 3a: Extract the ohmic series resistance from the EIS data into a separate dataframe
-
-    # partition by metadata columns and compute x-intercepts per group,
-    # since get_x_intercepts uses .over(group) internally and "cycle number"
-    # values repeat across different files
-    _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
-    series_resistance_df = pl.concat(
-        [
-            get_x_intercepts(
-                df=group_df,
-                x="Re(Z)/Ohm",
-                y="-Im(Z)/Ohm",
-                group="cycle",
-                which="last",
-                assume_sorted=False,
-            )
-            .with_columns(pl.lit(group_df[col][0]).alias(col) for col in _meta_cols)
-            .select(
-                *_meta_cols,
-                pl.col("cycle"),
-                pl.col("x_intercept").alias("ESR/Ohm"),
-            )
-            for group_df in eis_filtered_df.partition_by(_meta_cols, as_dict=False)
-        ],
-        how="vertical_relaxed",
-    )
-    return (series_resistance_df,)
-
-
-@app.cell
-def esr_per_participant_1(series_resistance_df):
-    # IMPEDANCE SPECTROSCOPY EVALUATION
-    # STEP 3b: Plot series resistance values per participants (mean value over repetitions)
-    #          with error bars representing the standard deviation of the mean)
-
-    # create a bar chart to compare the ESR values across participants and repetitions
-    series_resistance_per_participant = series_resistance_df.group_by(
-        "study_phase",
-        "participant",
-        "flow_rate",
-    ).agg(
-        pl.col("ESR/Ohm").mean().alias("mean_esr"),
-        pl.col("ESR/Ohm").std().alias("std_esr"),
-        pl.len().alias("cycles"),
-    ).sort(["study_phase", "participant", "flow_rate"])
-
-    _bars = (
-        alt.Chart(series_resistance_per_participant)
-        .mark_bar(
-            opacity=1
-        )
-        .encode(
-            x=alt.X("participant:N", title="Participant"),
-            y=alt.Y("mean_esr:Q", title="Mean ESR / Ohm"),
-            xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
-            color=alt.Color("participant:N", title="Participant"),
-            opacity=alt.Opacity("flow_rate:N", title="Flow Rate", scale=alt.Scale(range=[0.33, 1.0])),
-            tooltip=[
-                "study_phase:N",
-                "participant:N",
-                "flow_rate:O",
-                alt.Tooltip("mean_esr:Q", format=".4f"),
-                alt.Tooltip("std_esr:Q", format=".4f"),
-                "cycles:O",
-            ],
-        )
-    )
-
-    _errs = (
-        alt.Chart(series_resistance_per_participant)
-        .mark_errorbar(
-            ticks=True,
-            size=10,
-        )
-        .encode(
-            x="participant:N",
-            y=alt.Y("mean_esr:Q", title="Mean ESR / Ohm"),
-            yError="std_esr:Q",
-            xOffset="flow_rate:O",
-            color=alt.value("#000000"),
-        )
-    )
-
-    series_resistance_per_participant_plot = (
-        alt.layer(_bars, _errs)
-        .properties(
-            title=alt.TitleParams(
-                text="Figure 2. ESR per participant",
-                subtitle="ESR values for each participant across selected repetitions.",
-                anchor="start",
-                orient="top",
-                offset=20,
-            ),
-            width=325,
-        )
-        .configure_axisX(
-            labelAngle=-45
-        )
-    )
-    return (series_resistance_per_participant_plot,)
-
-
-@app.cell
-def esr_per_repetition(series_resistance_df):
-    # IMPEDANCE SPECTROSCOPY EVALUATION
-    # STEP 3c: Plot series resistance values over repetition (mean value over participants)
-    #          with error bars representing the standard deviation of the mean)
-
-    # create a bar chart to compare the ESR values across participants and repetitions
-    series_resistance_per_repetition = series_resistance_df.group_by(
-        "study_phase",
-        "repetition",
-        "flow_rate",
-    ).agg(
-        pl.col("ESR/Ohm").mean().alias("mean_esr"),
-        pl.col("ESR/Ohm").std().alias("std_esr"),
-        pl.len().alias("cycles"),
-    ).sort(["study_phase", "repetition", "flow_rate"])
-
-    # build domains for the ESR values
-    _all_esr = series_resistance_df["ESR/Ohm"]
-    _all_mean_esr = series_resistance_per_repetition["mean_esr"]
-    _esr_domain = [_all_esr.min() / 1.1, _all_esr.max() * 1.1]
-    _mean_esr_domain = [_all_mean_esr.min() / 1.1, _all_mean_esr.max() * 1.1]
-
-    # construct a box plot
-    _boxplot = (
-        alt.Chart(
-            series_resistance_df,
-        )
-        .mark_boxplot(
-            size=25,
-            ticks={"size": 10},
-            median={"color": "black", "thickness": 2},
-            outliers={"size": 15, "shape": "circle"},
-        )
-        .encode(
-            x=alt.X("repetition:O", title="Repetition"),
-            y=alt.Y(
-                "ESR/Ohm:Q", title="ESR / Ohm", scale=alt.Scale(domain=_esr_domain)
-            ),
-            xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
-            color=alt.Color("repetition:O", title="Repetition"),
-            opacity=alt.Opacity("flow_rate:O", title="Flow Rate", scale=alt.Scale(range=[1, 0.33])),
-        )
-    )
-
-    _mean = (
-        alt.Chart(series_resistance_per_repetition)
-        .mark_point(
-            color="black",
-            opacity=0.75,
-            shape="circle",
-            size=50,
-        )
-        .encode(
-            x=alt.X("repetition:O", title="Repetition"),
-            y=alt.Y(
-                "mean_esr:Q",
-                title="Mean ESR / Ohm",
-                scale=alt.Scale(domain=_esr_domain),
-            ),
-            xOffset="flow_rate:O",
-            tooltip=[
-                "study_phase:N",
-                "flow_rate:O",
-                alt.Tooltip("mean_esr:Q", format=".4f"),
-                alt.Tooltip("std_esr:Q", format=".4f"),
-                "cycles:Q",
-            ],
-        )
-    )
-
-    series_resistance_per_repetition_plot = (
-        alt.layer(_boxplot, _mean)
-        .resolve_scale(y="shared")
-        .resolve_axis(y="shared")
-        .properties(
-            title=alt.TitleParams(
-                text="Figure 3. ESR per repetition",
-                subtitle="ESR values for each repetition across selected participants.",
-                anchor="start",
-                orient="top",
-                offset=20,
-            ),
-            width=325,
-        )
-        .configure_axisX(labelAngle=0)
-    )
-    return (series_resistance_per_repetition_plot,)
-
-
-@app.cell
-def section_impedance_spectroscopy(
-    eis_filtered_df,
-    nyquist_plots,
-    series_resistance_per_participant_plot,
-    series_resistance_per_repetition_plot,
-):
-    # IMPEDANCE SPECTROSCOPY EVALUATION
-    # STEP 4: Display the content of the section and explain what it does
-
-    # display section content
-    mo.vstack(
-        [
-            mo.md("## Impedance Spectroscopy"),
-            mo.md("""
-                This section allows you to visualize the results of the Impedance Spectroscopy experiments. You can select one or more files containing the EIS data, and the notebook will generate Nyquist plots, extract ohmic series resistances for each selected file, and compare different repetitions and runs.
-            """),
-            mo.md("<br>"),
-            mo.md("### Raw data exploration"),
-            mo.md("""
-                The expandable sections enables you to explore the raw EIS data of all selected datasets in more detail. You can view the data in a tabular format and apply filter and computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
-            """),
-            mo.accordion(
-                {
-                    "Data table": mo.ui.dataframe(eis_filtered_df),
-                    "Data explorer": mo.ui.data_explorer(eis_filtered_df),
-                },
-                lazy=True,
-                multiple=True,
-            ),
-            mo.md("<br>"),
-            mo.md("### Nyquist plots"),
-            mo.md("""
-                These Nyquist plots show the relationship between the real and imaginary parts of the impedance grouped by participant. Each point on the plot corresponds to a specific frequency, and the shape of the plot can provide insights into the electrochemical processes occurring in the system.
-            """),
-            mo.md("<br>"),
-            nyquist_plots,
-            mo.md("<br>"),
-            mo.md("### Ohmic series resistance (ESR) comparison"),
-            mo.md("""
-                These plots compare the extracted ohmic series resistance (ESR) values across participants and repetitions. To keep it simple, the ESR was not fitted via a Randles circuit but simply estimated from the intercept of the Nyquist plots with the Re(Z)-axis. The first plot shows the mean ESR values for each participant with error bars representing the standard deviation across repetitions. The second plot shows the mean ESR values for each repetition with error bars representing the standard deviation across participants. You can use these plots to identify trends or differences in ESR values between participants and repetitions.
-            """),
-            mo.md("<br>"),
-            mo.hstack(
-                [
-                    series_resistance_per_participant_plot,
-                    series_resistance_per_repetition_plot,
-                ],
-                widths="equal",
-                gap=0,
-            ),
-            mo.md("<br>"),
-        ]
-    )
-    return
-
-
-@app.cell
-def _(data_structure_df, load_file, load_precomputed_df):
-    # POLARISATION DATA EVALUATION
-    # STEP 1a: Load ALL polarisation files from the full data_structure_df into a single flat DataFrame.
-
-    if is_wasm():
-        polarisation_flat_df = load_precomputed_df("polarisation_flat_df")
-    else:
-        # filter out polarisation files from the full (unfiltered) structure
-        _df_pol = data_structure_df.filter(pl.col("technique") == "02 polarisation")
-
-        # load each file (cached per file via @mo.persistent_cache) and concatenate
-        # into a single flat DataFrame with metadata columns
-        _frames = []
-        for _row in _df_pol.iter_rows(named=True):
-            try:
-                _data = load_file(_row["file_path"], ["CP"])    
-            except Exception as e:
-                print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
-                continue
-            if _data is not None:
-                # rename current and voltage columns
-                _data = _data.rename(
-                    {
-                        "<I>/mA": "current/mA",
-                        "I/mA": "current/mA",
-                        "<Ewe>/V": "voltage/V",
-                        "Ewe/V": "voltage/V",
-                        "cycle number": "cycle",
-                    },
-                    strict=False,
-                )
-                _frames.append(
-                    _data.with_columns(
-                        pl.lit(_row["study_phase"]).alias("study_phase"),
-                        pl.lit(_row["participant"]).alias("participant"),
-                        pl.lit(_row["repetition"]).alias("repetition"),
-                        pl.lit(_row["flow_rate"]).alias("flow_rate"),
-                        # shift study_phase, etc. to the leftmost position for easier access later on
-                    ).select(
-                        [
-                            "study_phase",
-                            "participant",
-                            "repetition",
-                            "flow_rate",
-                            *[
-                                col
-                                for col in _data.columns
-                                if col
-                                not in [
-                                    "study_phase",
-                                    "participant",
-                                    "repetition",
-                                    "flow_rate",
-                                ]
-                            ],
-                        ]
-                    )
-                )
-
-        polarisation_flat_df = (
-            pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
-        )
-    return (polarisation_flat_df,)
-
-
-@app.cell
-def _(
-    flow_rate_selector,
-    participant_selector,
-    polarisation_flat_df,
-    recalculate_time,
-    repetition_selector,
-    study_phase_selector,
-):
-    # POLARISATION DATA EVALUATION
-    # STEP 1b: Filter the polarisation data according to the UI selectors
-
-    # apply UI filter
-    polarisation_filtered_df = polarisation_flat_df.filter(
-        pl.col("study_phase").is_in([study_phase_selector.value])
-        & pl.col("participant").is_in(participant_selector.value)
-        & pl.col("repetition").is_in(repetition_selector.value)
-        & pl.col("flow_rate").is_in(flow_rate_selector.value)
-    )
-    mo.stop(
-        polarisation_filtered_df.is_empty(),
-    )
-
-    # recalculate time/s from datetime column for each group (study_phase, participant, repetition, flow_rate)
-    # NOTE: We do this to properly handle multiple files in one experiment folder
-    polarisation_filtered_df = recalculate_time(polarisation_filtered_df)
-    return (polarisation_filtered_df,)
-
-
-@app.cell
-def _(polarisation_filtered_df):
-    # POLARISATION DATA EVALUATION
-    # STEP 2a: Plot the time-voltage curves
-
-    # shift time to start at 0 per file (identified by metadata group)
-    _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
-    _chart_data = polarisation_filtered_df.with_columns(
-        (pl.col("time/s") - pl.col("time/s").min()).over(_meta_cols).alias("time/s"),
-    ).select(
-        [
-            *_meta_cols,
-            "Ns",
-            "time/s",
-            "voltage/V",
-            "current/mA",
-        ]
-    )
-
-    # downsample the data for better performance in the plot
-    _downsampled_chart_data = (
-        _chart_data.sort(
-            [
-                *_meta_cols,
-                "time/s",
-            ]
-        )
-        .with_columns(
-            pl.int_range(0, pl.len()).over([*_meta_cols, "Ns"]).alias("_i")
-        )
-        .filter((pl.col("_i") % 10) == 0)
-        .drop("_i")
-    )
-
-    # create selectors and bind them to the legend
-    _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
-    _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
-    _flow_rate_selection = alt.selection_point(fields=["flow_rate"], bind="legend")
-
-    # build polarisation plot from single flat DataFrame
-    polarisation_plots = (
-        alt.Chart(_downsampled_chart_data)
-        .mark_point()
-        .encode(
-            x=alt.X("time/s", title="Time / s"),
-            y=alt.Y("voltage/V", title="Voltage / V"),
-            color=alt.Color("participant:N", title="Participant"),
-            shape=alt.Shape("repetition:N", title="Repetition"),
-            size=alt.Size(
-                "flow_rate:N",
-                title="Flow Rate (mL/min⁻¹)",
-                scale=alt.Scale(range=[30, 150]),
-            ),
-            opacity=alt.condition(
-                _participant_selection 
-                & _repetition_selection
-                & _flow_rate_selection,
-                alt.value(1.0),
-                alt.value(0.0),
-            ),
-            tooltip=[
-                "participant:N",
-                "repetition:O",
-                "flow_rate:Q",
-                alt.Tooltip("time/s:Q", format=".1f"),
-                alt.Tooltip("voltage/V:Q", format=".4f"),
-            ],
-        )
-        .properties(
-            title="Polarisation Plot",
-        )
-        .add_params(_participant_selection, _repetition_selection, _flow_rate_selection)
-    ).properties(
-        title=alt.TitleParams(
-            text="Figure 4. Current-overvoltage curves for selected participants and repetitions",
-            subtitle="Current-overvoltage curves showing the relationship between current and overvoltage for each selected file.",
-            anchor="start",
-            orient="top",
-            offset=20,
-        ),
-        height=400,
-    )
-    return (polarisation_plots,)
-
-
-@app.cell
-def _(get_linregress_params, polarisation_filtered_df):
-    # POLARISATION DATA EVALUATION
-    # STEP 3a: Calculate the polarisation resistances based on the step voltages and applied currents (using a linear regression)
-
-    # define evaluation parameters
-    step_evaluation_tail_length = 10  # number of samples from the end of each step to consider for the evaluation
-    rest_current_tolerance = 1        # rest current tolerance (± X mA) to filter out rest steps
-
-    # aggregate the data: group_by now includes metadata columns alongside Ns
-    _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
-    polarisation_current_voltage_df = (
-        polarisation_filtered_df.group_by(
-            *_meta_cols,
-            "Ns",
-            maintain_order=True,
-        )
-        .agg(
-            pl.col("voltage/V")
-            .tail(step_evaluation_tail_length)
-            .median()
-            .alias("voltage/V"),
-            pl.col("current/mA")
-            .tail(step_evaluation_tail_length)
-            .median()
-            .alias("current/mA"),
-        )
-        .with_columns(
-            (pl.col("voltage/V") / pl.col("current/mA") * 1000).alias(
-                "polarisation_resistance/Ohm"
-            ),
-        )
-        .select(
-            [
-                *_meta_cols,
-                "Ns",
-                "voltage/V",
-                "current/mA",
-                "polarisation_resistance/Ohm",
-            ]
-        )
-    )
-
-    # drop rows where current is close to zero (rest steps) based on the defined tolerance
-    polarisation_current_voltage_df = polarisation_current_voltage_df.filter(
-        (pl.col("current/mA").abs() > rest_current_tolerance)
-    ).sort([*_meta_cols, "Ns"])
-
-    # perform linear regression on grouped data to get polarisation resistance as slope of the voltage-current curve for each participant, repetition, and flow rate
-    polarisation_resistance_df = (
-        polarisation_current_voltage_df.group_by(
-            *_meta_cols,
-        )
-        .map_groups(
-            lambda df: get_linregress_params(
-                df=df,
-                x_name="current/mA",
-                y_name="voltage/V",
-                with_columns=[
-                    *_meta_cols,
-                    "Ns",
-                    "current/mA",
-                    "voltage/V",
-                ],
-            )
-        )
-        .with_columns(
-            (pl.col("slope") * 1000).alias("polarisation_resistance/Ohm"),
-            (pl.col("stderr") * 1000).alias("polarisation_resistance_stderr/Ohm"),
-        )
-        .select(
-            [
-                *_meta_cols,
-                "Ns",
-                "voltage/V",
-                "current/mA",
-                "polarisation_resistance/Ohm",
-                "polarisation_resistance_stderr/Ohm",
-            ]
-        )
-        .sort([*_meta_cols, "Ns"])
-    )
-    return (
-        polarisation_current_voltage_df,
-        polarisation_resistance_df,
-        step_evaluation_tail_length,
-    )
-
-
-@app.cell
-def _(polarisation_current_voltage_df):
-    # POLARISATION DATA EVALUATION
-    # STEP 3b: Plot the step voltage over the step current
-
-    # compute per-axis data ranges, then build domains with some padding
-    _all_currents = polarisation_current_voltage_df["current/mA"].abs()
-    _current_max = _all_currents.max()
-    _current_domain = [-_current_max * 1.1, _current_max * 1.1]
-
-    # selectors bound to legends
-    _participant_selection = alt.selection_point(encodings=["color"], bind="legend")
-    _repetition_selection = alt.selection_point(encodings=["shape"], bind="legend")
-    _flow_rate_selection = alt.selection_point(encodings=["size"], bind="legend")
-
-    points = (
-        alt.Chart(polarisation_current_voltage_df)
-        .mark_point(filled=True, size=50)
-        .encode(
-            x=alt.X(
-                "current/mA:Q",
-                title="Current / mA",
-                scale=alt.Scale(domain=_current_domain),
-            ),
-            y=alt.Y("voltage/V:Q", title="Voltage / V"),
-            color=alt.Color("participant:N", title="Participant"),
-            shape=alt.Shape("repetition:N", title="Repetition"),
-            size=alt.Size(
-                "flow_rate:N",
-                title="Flow Rate (mL min⁻¹)",
-                scale=alt.Scale(range=[30, 150]),
-            ),
-            opacity=alt.condition(
-                _participant_selection
-                & _repetition_selection
-                & _flow_rate_selection,
-                alt.value(1.0),
-                alt.value(0.05),
-            ),
-            tooltip=[
-                "participant:N",
-                "repetition:O",
-                "flow_rate:Q",
-                alt.Tooltip("current/mA:Q", format=".1f"),
-                alt.Tooltip("voltage/V:Q", format=".4f"),
-            ],
-        )
-    )
-
-    regression_lines = (
-        alt.Chart(polarisation_current_voltage_df)
-        .transform_regression(
-            "current/mA", "voltage/V", groupby=["participant", "repetition"]
-        )
-        .mark_line()
-        .encode(
-            x="current/mA:Q",
-            y="voltage/V:Q",
-            color=alt.Color("participant:N", title="Participant"),
-            strokeDash=alt.StrokeDash(
-                "repetition:N", title="Repetition", legend=None
-            ),  # dash in plot
-            opacity=alt.condition(
-                _participant_selection
-                & _repetition_selection
-                & _flow_rate_selection,
-                alt.value(1.0),
-                alt.value(0.05),
-            ),
-        )
-    )
-
-    polarisation_voltage_current_plots = (
-        alt.layer(points, regression_lines)
-        .add_params(_participant_selection, _repetition_selection, _flow_rate_selection)
-        .resolve_legend(color="shared", shape="shared", strokeDash="shared")
-    )
-
-    # polarisation_voltage_current_plots
-    return (polarisation_voltage_current_plots,)
-
-
-@app.cell
-def _(polarisation_resistance_df):
-    # POLARISATION DATA EVALUATION
-    # STEP 3c: Plot polarisation resistance values per participants (mean value over repetitions)
-    #          with error bars representing the standard deviation of the mean)
-
-    # create a bar chart to compare the ESR values across participants and repetitions
-    polarisation_resistance_per_participant = polarisation_resistance_df.group_by(
-        "study_phase",
-        "participant",
-        "flow_rate",
-    ).agg(
-        pl.col("polarisation_resistance/Ohm").mean().alias("mean_resistance"),
-        pl.col("polarisation_resistance/Ohm").std().alias("std_resistance"),
-        pl.len().alias("cycles"),
-    )
-
-    # create selectors and bind them to the legend
-    _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
-
-    _bars = (
-        alt.Chart(polarisation_resistance_per_participant)
-        .mark_bar()
-        .encode(
-            x=alt.X("participant:O", title="Participant"),
-            y=alt.Y("mean_resistance:Q", title="Polarisation Resistance / Ohm"),
-            xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
-            color=alt.Color("participant:N", title="Study Phase"),
-            opacity=alt.Opacity("flow_rate:N", title="Flow Rate", scale=alt.Scale(range=[1.0, 0.5])),
-            tooltip=[
-                "study_phase:O",
-                "participant:O",
-                "flow_rate:O",
-                alt.Tooltip("mean_resistance:Q", format=".4f"),
-                alt.Tooltip("std_resistance:Q", format=".4f"),
-                "cycles:Q",
-            ],
-        )
-        .add_params(
-            _participant_selection,
-        )
-    )
-
-    _errs = (
-        alt.Chart(polarisation_resistance_per_participant)
-        .mark_errorbar(
-            ticks=True,
-            size=10,
-        )
-        .encode(
-            x="participant:O",
-            y=alt.Y("mean_resistance:Q", title="Polarisation Resistance / Ohm"),
-            yError="std_resistance:Q",
-            xOffset="flow_rate:O",
-            color=alt.value("#000000"),
-        )
-        .add_params(
-            _participant_selection,
-        )
-    )
-
-    polarisation_resistance_per_participant_plot = (
-        alt.layer(_bars, _errs)
-        .properties(
-            title=alt.TitleParams(
-                text="Figure 6. Polarisation resistance per participant",
-                subtitle="Mean polarisation resistance values for each participant across selected repetitions.",
-                anchor="start",
-                orient="top",
-                offset=20,
-            ),
-            width=325,
-        )
-        .configure_axisX(labelAngle=-45)
-    )
-    return (polarisation_resistance_per_participant_plot,)
-
-
-@app.cell
-def _(polarisation_resistance_df):
-    # POLARISATION DATA EVALUATION
-    # STEP 3d: Plot polarisation resistance values over repetition (mean value over participants)
-    #          with error bars representing the standard deviation of the mean)
-
-    # create a bar chart to compare the ESR values across participants and repetitions
-    polarisation_resistance_per_repetition = polarisation_resistance_df.group_by(
-        "study_phase",
-        "repetition",
-        "flow_rate",
-    ).agg(
-        pl.col("polarisation_resistance/Ohm").mean().alias("mean_resistance"),
-        pl.col("polarisation_resistance/Ohm").std().alias("std_resistance"),
-        pl.len().alias("cycles"),
-    )
-
-    # build domains for the polarisation resistance values
-    _all_resistance = polarisation_resistance_df["polarisation_resistance/Ohm"]
-    _all_mean_resistance = polarisation_resistance_per_repetition["mean_resistance"]
-    _resistance_domain = [_all_resistance.min() / 1.1, _all_resistance.max() * 1.1]
-    _mean_resistance_domain = [
-        _all_mean_resistance.min() / 1.1,
-        _all_mean_resistance.max() * 1.1,
-    ]
-
-    # construct a box plot
-    _boxplot = (
-        alt.Chart(
-            polarisation_resistance_df,
-        )
-        .mark_boxplot(
-            size=25,
-            ticks={"size": 10},
-            median={"color": "black", "thickness": 2},
-            outliers={"size": 15, "shape": "circle"},
-        )
-        .encode(
-            x=alt.X("repetition:O", title="Repetition"),
-            y=alt.Y(
-                "polarisation_resistance/Ohm:Q",
-                title="Polarisation Resistance / Ohm",
-                scale=alt.Scale(domain=_resistance_domain),
-            ),
-            xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
-            color=alt.Color("repetition:O", title="Repetition"),
-            opacity=alt.Opacity("flow_rate:O", title="Flow Rate", scale=alt.Scale(range=[1, 0.33])),
-        )
-    )
-
-    _mean = (
-        alt.Chart(polarisation_resistance_per_repetition)
-        .mark_point(
-            color="black",
-            opacity=0.75,
-            shape="circle",
-            size=50,
-        )
-        .encode(
-            x=alt.X("repetition:O", title="Repetition"),
-            y=alt.Y(
-                "mean_resistance:Q",
-                title="Polarisation Resistance / Ohm",
-                scale=alt.Scale(domain=_mean_resistance_domain),
-            ),
-            xOffset="flow_rate:O",
-            tooltip=[
-                "study_phase:O",
-                "flow_rate:O",
-                alt.Tooltip("mean_resistance:Q", format=".4f"),
-                alt.Tooltip("std_resistance:Q", format=".4f"),
-                "cycles:Q",
-            ],
-        )
-    )
-
-    polarisation_resistance_per_repetition_plot = (
-        alt.layer(_boxplot, _mean)
-        .properties(
-            title=alt.TitleParams(
-                text="Figure 7. Polarisation resistance per repetition",
-                subtitle="Polarisation resistance values for each repetition across selected participants.",
-                anchor="start",
-                orient="top",
-                offset=20,
-            ),
-            width=325,
-        )
-        .configure_axisX(labelAngle=0)
-    )
-    return (polarisation_resistance_per_repetition_plot,)
-
-
-@app.cell
-def section_polarisation(
-    polarisation_filtered_df,
-    polarisation_plots,
-    polarisation_resistance_per_participant_plot,
-    polarisation_resistance_per_repetition_plot,
-    polarisation_voltage_current_plots,
-    step_evaluation_tail_length,
-):
-    # display section content
-    mo.vstack(
-        [
-            mo.md("## Polarisation experiments"),
-            mo.md("""
-                This section allows you to visualize the results of the data from the polarisation experiments. You can select one or more files containing the polarisation data, and the notebook will generate visualizations to help you analyze the results and compare different repetitions and runs.
-            """),
-            mo.md("<br>"),
-            mo.md("### Raw data exploration"),
-            mo.md("""
-                The expandable sections enables you to explore the raw polarisation data of all selected datasets in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
-            """),
-            mo.accordion(
-                {
-                    "Data table": polarisation_filtered_df,
-                    "Data explorer": mo.ui.data_explorer(polarisation_filtered_df),
-                },
-                lazy=True,
-                multiple=True,
-            ),
-            mo.md("<br>"),
-            mo.md("### Current-overvoltage curves"),
-            mo.md("""
-                These plots show the relationship between the current and the overvoltage (i.e., applied voltage - OCV) for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as activation losses, ohmic losses, and mass transport limitations. You can compare the curves across different participants and repetitions to identify trends or differences in the polarisation behavior.
-            """),
-            mo.md("<br>"),
-            polarisation_plots,
-            polarisation_voltage_current_plots,
-            mo.md("<br>"),
-            mo.md("### Polarisation resistance comparison"),
-            mo.md(f"""
-                These plots compare the extracted polarisation resistance values across participants and repititions. The polarisation resistance was calculated from the voltage and current values of the polarisation steps by first collecting the median voltage _versus_ median current of the last {step_evaluation_tail_length} points of each polarisation step. Subsequently, a linear regression was performed over the collected data. The first plot shows the mean polarisation resistance values for each participant with error bars representing the standard deviation across all selected repetitions. The second plot shows the mean polarisation resistance values for each repetition with error bars representing the standard deviation across all selected participants. You can use these plots to identify trends or differences in polarisation resistance values between participants and repetitions.
-            """),
-            mo.md("<br>"),
-            mo.hstack(
-                [
-                    polarisation_resistance_per_participant_plot,
-                    polarisation_resistance_per_repetition_plot,
-                ],
-                widths="equal",
-                gap=0,
-            ),
-            mo.md("<br>"),
-        ]
-    )
-    return
-
-
-@app.cell
-def _(data_structure_df, load_file, load_precomputed_df):
-    # CHARGE-DISCHARGE CYCLING EVALUATION
-    # STEP 1a: Load ALL charge-discharge files from the full data_structure_df into a single flat DataFrame.
-    # Filtering by UI selectors is applied later at chart/computation time.
-
-    if is_wasm():
-        cd_cycling_flat_df = load_precomputed_df("cd_cycling_flat_df")
-    else:
-        # filter out charge-discharge files from the full (unfiltered) structure
-        _df_cd = data_structure_df.filter(pl.col("technique") == "03 charge-discharge")
-
-        # load each file (cached per file via @mo.persistent_cache) and concatenate
-        # into a single flat DataFrame with metadata columns
-        _frames = []
-        for _row in _df_cd.iter_rows(named=True):
-            try:
-                _data = load_file(_row["file_path"], ["GCPL"])    
-            except Exception as e:
-                print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
-                continue
-            if _data is not None:
-                # rename current and voltage columns
-                _data = _data.rename(
-                    {
-                        "<I>/mA": "current/mA",
-                        "I/mA": "current/mA",
-                        "<Ewe>/V": "voltage/V",
-                        "Ewe/V": "voltage/V",
-                    },
-                    strict=False,
-                )
-
-                # if no current column is found, try to extract it from the time and capacity columns
-                if "current/mA" not in _data.columns and "dq/mA.h" in _data.columns:
-                    # compute current from capacity and time (I = dQ/dt)
-                    _data = _data.with_columns(
-                        (
-                            pl.col("dq/mA.h").diff().fill_null(0)
-                            / pl.col("time/s").diff().fill_null(1)
-                            * 3600
-                        ).alias("current/mA")
-                    )
-
-                _frames.append(
-                    _data.with_columns(
-                        pl.lit(_row["study_phase"]).alias("study_phase"),
-                        pl.lit(_row["participant"]).alias("participant"),
-                        pl.lit(_row["repetition"]).alias("repetition"),
-                        pl.lit(_row["flow_rate"]).alias("flow_rate"),
-                        # shift study_phase, etc. to the leftmost position for easier access later on
-                    ).select(
-                        [
-                            "study_phase",
-                            "participant",
-                            "repetition",
-                            "flow_rate",
-                            *[
-                                col
-                                for col in _data.columns
-                                if col
-                                not in [
-                                    "study_phase",
-                                    "participant",
-                                    "repetition",
-                                    "flow_rate",
-                                ]
-                            ],
-                        ]
-                    )
-                )
-
-        cd_cycling_flat_df = (
-            pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
-        )
-    return (cd_cycling_flat_df,)
-
-
-@app.cell
-def _(
-    cd_cycling_flat_df,
-    flow_rate_selector,
-    participant_selector,
-    repetition_selector,
-    study_phase_selector,
-):
-    # CHARGE-DISCHARGE CYCLING EVALUATION
-    # STEP 1b: Filter the charge-discharge data according to the UI selectors
-
-    # apply UI filter
-    cd_cycling_filtered_df = cd_cycling_flat_df.filter(
-        pl.col("study_phase").is_in([study_phase_selector.value])
-        & pl.col("participant").is_in(participant_selector.value)
-        & pl.col("repetition").is_in(repetition_selector.value)
-        & pl.col("flow_rate").is_in(flow_rate_selector.value)
-    )
-    mo.stop(
-        cd_cycling_filtered_df.is_empty(),
-    )
-    return (cd_cycling_filtered_df,)
-
-
-@app.cell
-def _(cd_cycling_filtered_df):
-    # CHARGE-DISCHARGE CYCLING EVALUATION
-    # STEP 2a: Prepare dataframes for the voltage-capacity as well as voltage-dQ/dV curves from the charge-discharge cycling data
-
-    # compute derived columns using .over() to keep per-file semantics
-    _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
-    # Step 1: compute diff-based columns within each file group
-    _cd_with_diffs = cd_cycling_filtered_df.with_columns(
-        pl.col("time/s").diff().over(_meta_cols).alias("dt/s"),
-        pl.col("Q charge/discharge/mA.h").alias("capacity/mAh"),
-        (
-            pl.col("Q charge/discharge/mA.h").diff().over(_meta_cols)
-            / pl.col("voltage/V").diff().over(_meta_cols)
-        ).alias("_dQ_dV_raw"),
-    )
-    # Step 2: smooth dQ/dV with rolling median within each file group
-    df_filtered_cd_cycling_data = _cd_with_diffs.with_columns(
-        pl.col("_dQ_dV_raw").rolling_median(25).over(_meta_cols).alias("dQ/dV"),
-    ).select(
-        [
-            *_meta_cols,
-            "half cycle",
-            "time/s",
-            "voltage/V",
-            "current/mA",
-            "capacity/mAh",
-            "dQ/dV",
-        ]
-    )
-
-    # downsample the data for better performance in the plot
-    df_filtered_cd_cycling_chart_data = (
-        df_filtered_cd_cycling_data.sort(
-            [
-                *_meta_cols,
-                "half cycle",
-                "time/s",
-            ]
-        )
-        .with_columns(
-            pl.int_range(0, pl.len()).over([*_meta_cols, "half cycle"]).alias("_i")
-        )
-        .filter((pl.col("_i") % 10) == 0)
-        .drop("_i")
-    )
-
-    # create a ui slider to chose the half-cycle to display
-    # (removed stray mo.ui.slider(start=1, stop=10, step=1))
-    slider_half_cycle = mo.ui.slider(
-        label="",
-        start=int(df_filtered_cd_cycling_chart_data["half cycle"].min() / 2),
-        stop=int(df_filtered_cd_cycling_chart_data["half cycle"].max() / 2),
-        step=1,
-        full_width=True,
-        show_value=True,
-    )
-    return (
-        df_filtered_cd_cycling_chart_data,
-        df_filtered_cd_cycling_data,
-        slider_half_cycle,
-    )
-
-
-@app.cell
-def _(
-    df_filtered_cd_cycling_chart_data,
-    df_filtered_cd_cycling_data,
-    slider_half_cycle,
-    wheel_zoom_x,
-    wheel_zoom_xy,
-    wheel_zoom_y,
-):
-    # CHARGE-DISCHARGE CYCLING EVALUATION
-    # STEP 2b: Build the voltage-time as well as voltage-dQ/dV curves for the charge-discharge cycling data
-
-    # create selectors and bind them to the legend
-    _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
-    _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
-
-    _cd_cycling_capacity_voltage_data = df_filtered_cd_cycling_chart_data.filter(
-        (pl.col("half cycle") == slider_half_cycle.value)
-        | (pl.col("half cycle") == slider_half_cycle.value + 1)
-    ).with_columns(
-        pl.col("capacity/mAh").abs().alias("capacity/mAh"),
-    )
-
-    # compute per-axis data ranges, then build domains with some padding
-    _all_voltage = _cd_cycling_capacity_voltage_data["voltage/V"]
-    _voltage_domain = [_all_voltage.min(), _all_voltage.max()]
-    _dqdv_domain = [0, df_filtered_cd_cycling_data["dQ/dV"].max()]
-
-    # build a plot of voltage vs. capacity for the selected cycle
-    cd_cycling_capacity_voltage = (
-        alt.Chart(
-            _cd_cycling_capacity_voltage_data
-        )
-        .mark_point()
-        .encode(
-            x=alt.X("capacity/mAh:Q", title="Capacity / mAh"),
-            y=alt.Y(
-                "voltage/V:Q",
-                title="Voltage / V",
-                scale=alt.Scale(domain=_voltage_domain),
-            ),
-            color=alt.Color("participant:N", title="Participant"),
-            shape=alt.Shape("repetition:N", title="Repetition"),
-            opacity=alt.condition(
-                _participant_selection & _repetition_selection,
-                alt.value(1.0),
-                alt.value(0.0),
-            ),
-            tooltip=[
-                "participant:N",
-                "repetition:O",
-                "flow_rate:Q",
-                alt.Tooltip("capacity/mAh:Q", format=".1f"),
-                alt.Tooltip("voltage/V:Q", format=".4f"),
-            ],
-        )
-        .properties(width=720)
-    )
-
-    # build a plot of dQ/dV vs. voltage for the selected cycle
-    cd_cycling_dqdv_charts = (
-        alt.Chart(
-            df_filtered_cd_cycling_data.sort(
-                [
-                    "study_phase",
-                    "participant",
-                    "repetition",
-                    "flow_rate",
-                    "half cycle",
-                    "time/s",
-                ]
-            ).filter(
-                (pl.col("half cycle") == slider_half_cycle.value)
-                | (pl.col("half cycle") == slider_half_cycle.value + 1)
-            )
-        )
-        .mark_bar(
-            orient="horizontal",
-        )
-        .encode(
-            x=alt.X(
-                "dQ/dV:Q", title="dQ/dV / mAh/V", scale=alt.Scale(domain=_dqdv_domain)
-            ),
-            y=alt.Y(
-                "voltage/V:Q",
-                title="",
-                scale=alt.Scale(domain=_voltage_domain),
-                axis=alt.Axis(title=None, labels=False, ticks=False),
-            ),
-            color=alt.Color("participant:N", title="Participant"),
-            opacity=alt.condition(
-                _participant_selection & _repetition_selection,
-                alt.value(1.0),
-                alt.value(0.0),
-            ),
-            tooltip=[
-                "participant:N",
-                "repetition:O",
-                "flow_rate:Q",
-                alt.Tooltip("dQ/dV:Q", format=".2f"),
-                alt.Tooltip("voltage/V:Q", format=".4f"),
-            ],
-        )
-        .properties(
-            width=170,
-        )
-    )
-
-    cd_cycling_charts = (
-        alt.hconcat(cd_cycling_capacity_voltage, cd_cycling_dqdv_charts)
-        .resolve_legend(color="shared")
-        .properties(
-            title=alt.TitleParams(
-                text="Figure 8. Charge-discharge cycling data",
-                subtitle="Voltage-capacity curves and dQ/dV plots for the selected cycle.",
-                anchor="start",
-                orient="top",
-                offset=20,
-            ),
-        )
-        .interactive()
-        .add_params(_participant_selection, _repetition_selection)
-        .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
-    )
-    return (cd_cycling_charts,)
-
-
-@app.cell
-def _(df_filtered_cd_cycling_data, get_linregress_params):
-    # CHARGE-DISCHARGE CYCLING EVALUATION
-    # STEP 3a: Aggregate the capacity data for each cycle as charge and discharge capacity and compute the coulombic efficiency
-
-    # filter out each half-cycle's end capacity
-    cd_cycling_filtered_cycle_data = (
-        df_filtered_cd_cycling_data.group_by(
-            "study_phase",
-            "participant",
-            "repetition",
-            "flow_rate",
-            "half cycle",
-        )
-        .agg(
-            (pl.col("time/s") / 3600).last().alias("time/h"),
-            pl.col("capacity/mAh").last().alias("capacity/mAh"),
-        )
-        .sort(["study_phase", "participant", "repetition", "flow_rate", "half cycle"])
-    )
-
-    # separate capacity values for charge and discharge steps by filtering positive (charge) and negative (discharge) capacity values
-    cd_cycling_filtered_cycle_data = (
-        cd_cycling_filtered_cycle_data.with_columns(
-            pl.when(pl.col("capacity/mAh") > 0)
-            .then(pl.col("capacity/mAh"))
-            .otherwise(None)
-            .alias("charge_capacity/mAh"),
-            pl.when(pl.col("capacity/mAh") < 0)
-            .then(pl.col("capacity/mAh").abs())
-            .otherwise(None)
-            .alias("discharge_capacity/mAh"),
-        )
-        .drop("capacity/mAh")
-        .group_by(
-            "study_phase",
-            "participant",
-            "repetition",
-            "flow_rate",
-            (pl.col("half cycle") // 2).alias("cycle"),
-        )
-        .agg(
-            pl.col("time/h").last().alias("time/h"),
-            pl.col("charge_capacity/mAh").first().alias("charge_capacity/mAh"),
-            pl.col("discharge_capacity/mAh").last().alias("discharge_capacity/mAh"),
-        )
-        .sort(["study_phase", "participant", "repetition", "flow_rate", "cycle"])
-    )
-
-    # calculate coulombic efficiency for each cycle
-    cd_cycling_filtered_cycle_data = cd_cycling_filtered_cycle_data.with_columns(
-        (pl.col("discharge_capacity/mAh") / pl.col("charge_capacity/mAh") * 100).alias(
-            "coulombic_efficiency/%"
-        ),
-    ).sort(["study_phase", "participant", "repetition", "flow_rate", "cycle"])
-
-    # drop all cycles with:
-    # - undefined coulombic efficiency
-    # - coulombic efficiency smaller than 60% greater than 140%
-    cd_cycling_filtered_cycle_data = cd_cycling_filtered_cycle_data.drop_nans(
-        "coulombic_efficiency/%"
-    ).filter(
-        (pl.col("coulombic_efficiency/%") > 60)
-        & (pl.col("coulombic_efficiency/%") < 140)
-    )
-
-    # calculate capacity retention relative to the initial discharge capacity for each group
-    cd_cycling_filtered_cycle_data = cd_cycling_filtered_cycle_data.with_columns(
-        (
-            pl.col("discharge_capacity/mAh")
-            / pl.col("discharge_capacity/mAh")
-            .first()
-            .over(
-                "study_phase",
-                "participant",
-                "repetition",
-                "flow_rate",
-            )
-            * 100
-        ).alias("capacity_retention/%")
-    ).sort(["study_phase", "participant", "repetition", "flow_rate", "cycle"])
-
-    # get the initial discharge capacity for each group
-    cd_cycling_initial_discharge_capacity = cd_cycling_filtered_cycle_data.group_by(
-        "study_phase",
-        "participant",
-        "repetition",
-        "flow_rate",
-    ).agg(
-        pl.col("discharge_capacity/mAh").first().alias("capacity/mAh"),
-    )
-
-    # compute the capacity fade relative to the initial discharge capacity for each group by performing a group mapping of get_linregress_params over the capacity-time data and extracting the slope of the linear regression as capacity fade rate
-    cd_cycling_filtered_capacity_fade_time = (
-        cd_cycling_filtered_cycle_data.group_by(
-            "study_phase",
-            "participant",
-            "repetition",
-            "flow_rate",
-        )
-        .map_groups(
-            lambda df: get_linregress_params(
-                df=df,
-                x_name="time/h",
-                y_name="capacity_retention/%",
-                with_columns=[
-                    "study_phase",
-                    "participant",
-                    "repetition",
-                    "flow_rate",
-                    "time/h",
-                    "cycle",
-                    "capacity_retention/%",
-                ],
-            )
-        )
-        .sort(
-            ["study_phase", "participant", "repetition", "flow_rate", "time/h", "cycle"]
-        )
-        .with_columns(
-            (pl.col("slope") * 24).alias("capacity_fade_rate/%/d"),
-        )
-        .select(
-            [
-                "study_phase",
-                "participant",
-                "repetition",
-                "flow_rate",
-                "capacity_fade_rate/%/d",
-            ]
-        )
-        .sort(["study_phase", "participant", "repetition", "flow_rate"])
-    )
-
-    # compute the capacity fade relative to the initial discharge capacity for each group by performing a group mapping of get_linregress_params over the capacity-cycle data and extracting the slope of the linear regression as capacity fade rate
-    cd_cycling_filtered_capacity_fade_cycle = (
-        cd_cycling_filtered_cycle_data.group_by(
-            "study_phase",
-            "participant",
-            "repetition",
-            "flow_rate",
-        )
-        .map_groups(
-            lambda df: get_linregress_params(
-                df=df,
-                x_name="cycle",
-                y_name="capacity_retention/%",
-                with_columns=[
-                    "study_phase",
-                    "participant",
-                    "repetition",
-                    "flow_rate",
-                    "time/h",
-                    "cycle",
-                    "capacity_retention/%",
-                ],
-            )
-        )
-        .sort(
-            ["study_phase", "participant", "repetition", "flow_rate", "time/h", "cycle"]
-        )
-        .with_columns(
-            (pl.col("slope")).alias("capacity_fade_rate/cycle"),
-        )
-        .select(
-            [
-                "study_phase",
-                "participant",
-                "repetition",
-                "flow_rate",
-                "capacity_fade_rate/cycle",
-            ]
-        )
-        .sort(["study_phase", "participant", "repetition", "flow_rate"])
-    )
-    return (
-        cd_cycling_filtered_capacity_fade_cycle,
-        cd_cycling_filtered_capacity_fade_time,
-        cd_cycling_filtered_cycle_data,
-        cd_cycling_initial_discharge_capacity,
-    )
-
-
-@app.cell
-def _(
-    cd_cycling_filtered_capacity_fade_cycle,
-    cd_cycling_filtered_cycle_data,
-    wheel_zoom_x,
-    wheel_zoom_xy,
-    wheel_zoom_y,
-):
-    # CHARGE-DISCHARGE CYCLING EVALUATION
-    # STEP 3b: Build the capacity-cycle curves for the charge-discharge cycling data
-
-    # create selectors and bind them to the legend
-    _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
-    _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
-
-    # build domains for the capacity retention values and time values
-    _all_capacity_retention = cd_cycling_filtered_cycle_data["capacity_retention/%"]
-    _capacity_retention_domain = [
-        _all_capacity_retention.min() / 1.02,
-        _all_capacity_retention.max() * 1.02,
-    ]
-
-    _capacity_cycle_chart = (
-        alt.Chart(cd_cycling_filtered_cycle_data)
-        .mark_point()
-        .encode(
-            x=alt.X("cycle:Q", title="Cycle"),
-            y=alt.Y(
-                "capacity_retention/%",
-                title="(Discharge) Capacity Retention / %",
-                scale=alt.Scale(domain=_capacity_retention_domain),
-            ),
-            color=alt.Color("participant:N", title="Participant"),
-            shape=alt.Shape("repetition:N", title="Repetition"),
-            opacity=alt.condition(
-                _participant_selection & _repetition_selection,
-                alt.value(1.0),
-                alt.value(0.0),
-            ),
-            tooltip=[
-                "participant:N",
-                "repetition:O",
-                "flow_rate:Q",
-                alt.Tooltip("cycle:Q", format=".0f"),
-                alt.Tooltip("charge_capacity/mAh:Q", format=".1f"),
-                alt.Tooltip("discharge_capacity/mAh:Q", format=".1f"),
-            ],
-        )
-        .properties(
-            width=720,
-            height=300,
-        )
-    )
-
-    # CHARGE-DISCHARGE CYCLING EVALUATION
-    # STEP 3c: Build bar chart for cycle-based capacity fade rates per participant and repetition
-    _capacity_fade_cycle_chart = (
-        alt.Chart(cd_cycling_filtered_capacity_fade_cycle)
-        .mark_bar()
-        .encode(
-            x=alt.X(
-                "capacity_fade_rate/cycle:Q", title="Capacity fade rate / % cycle⁻¹"
-            ),
-            y=alt.Y(
-                "participant:N", axis=alt.Axis(title=None, labels=False, ticks=False)
-            ),
-            yOffset=alt.YOffset("repetition:O", title="Repetition"),
-            color=alt.Color("participant:N", title="Participant"),
-            opacity=alt.Opacity("repetition:O", title="Repetition", scale=alt.Scale(range=[1, 0.33])),
-            tooltip=[
-                "study_phase:O",
-                "participant:N",
-                "repetition:O",
-                "flow_rate:Q",
-                alt.Tooltip("capacity_fade_rate/cycle:Q", format=".4f"),
-            ],
-        )
-        .properties(
-            width=170,
-            height=300,
-        )
-    )
-
-    # build the final chart by concatenating the capacity-time and capacity fade rate charts and resolving the legends
-    cd_cycling_capacity_cycle_chart = (
-        alt.hconcat(_capacity_cycle_chart, _capacity_fade_cycle_chart)
-        .resolve_legend(color="shared")
-        .properties(
-            title=alt.TitleParams(
-                text="Figure 9. Capacity retention over cycle (left) and corresponding capacity fade rate (right).",
-                subtitle=[
-                    "Data is shown for the selected participants and repetitions. Capacity fade rate was calculated as the slope of a linear regression over the (discharge) capacity retention vs. cycle data of",
-                    "each repetition individually.",
-                ],
-                anchor="start",
-                orient="top",
-                offset=20,
-            ),
-        )
-        .interactive()
-        .add_params(_participant_selection, _repetition_selection)
-        .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
-    )
-    return (cd_cycling_capacity_cycle_chart,)
-
-
-@app.cell
-def _(
-    cd_cycling_filtered_capacity_fade_time,
-    cd_cycling_filtered_cycle_data,
-    wheel_zoom_x,
-    wheel_zoom_xy,
-    wheel_zoom_y,
-):
-    # CHARGE-DISCHARGE CYCLING EVALUATION
-    # STEP 3b: Build the capacity-time curves for the charge-discharge cycling data
-
-    # create selectors and bind them to the legend
-    _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
-    _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
-
-    # build domains for the capacity retention values and time values
-    _all_capacity_retention = cd_cycling_filtered_cycle_data["capacity_retention/%"]
-    _capacity_retention_domain = [
-        _all_capacity_retention.min() / 1.02,
-        _all_capacity_retention.max() * 1.02,
-    ]
-
-    # build a chart of capacity vs. time for the selected cycle
-    _capacity_time_chart = (
-        alt.Chart(cd_cycling_filtered_cycle_data)
-        .mark_point()
-        .encode(
-            x=alt.X("time/h:Q", title="Time / h"),
-            y=alt.Y(
-                "capacity_retention/%:Q",
-                title="(Discharge) Capacity Retention / %",
-                scale=alt.Scale(domain=_capacity_retention_domain),
-            ),
-            color=alt.Color("participant:N", title="Participant"),
-            shape=alt.Shape("repetition:N", title="Repetition"),
-            opacity=alt.condition(
-                _participant_selection & _repetition_selection,
-                alt.value(1.0),
-                alt.value(0.0),
-            ),
-            tooltip=[
-                "participant:N",
-                "repetition:O",
-                "flow_rate:Q",
-                "cycle:O",
-                alt.Tooltip("time/h:Q", format=".0f"),
-                alt.Tooltip("discharge_capacity/mAh:Q", format=".1f"),
-            ],
-        )
-        .properties(
-            width=720,
-            height=300,
-        )
-    )
-
-    # build a chart of capacity fade rate vs. time for the selected cycle
-    _capacity_fade_time_chart = (
-        alt.Chart(cd_cycling_filtered_capacity_fade_time)
-        .mark_bar()
-        .encode(
-            x=alt.X("capacity_fade_rate/%/d:Q", title="Capacity fade rate / % d⁻¹"),
-            y=alt.Y(
-                "participant:N", axis=alt.Axis(title=None, labels=False, ticks=False)
-            ),
-            yOffset=alt.YOffset("repetition:O", title="Repetition"),
-            color=alt.Color("participant:N", title="Participant"),
-            opacity=alt.Opacity("repetition:O", title="Repetition",scale=alt.Scale(range=[1, 0.33])),
-            tooltip=[
-                "study_phase:N",
-                "participant:N",
-                "repetition:O",
-                "flow_rate:Q",
-                alt.Tooltip("capacity_fade_rate/%/d:Q", format=".4f"),
-            ],
-        )
-        .properties(
-            width=170,
-            height=300,
-        )
-    )
-
-    # build the final chart by concatenating the capacity-time and capacity fade rate charts and resolving the legends
-    cd_cycling_capacity_time_chart = (
-        alt.hconcat(_capacity_time_chart, _capacity_fade_time_chart)
-        .resolve_legend(color="shared")
-        .properties(
-            title=alt.TitleParams(
-                text="Figure 10. Capacity retention over time (left) and corresponding capacity fade rate (right).",
-                subtitle=[
-                    "Data is shown for the selected participants and repetitions. Capacity fade rate was calculated as the slope of a linear regression over the (discharge) capacity retention vs. time data of ",
-                    "each repetition individually.",
-                ],
-                anchor="start",
-                orient="top",
-                offset=20,
-            )
-        )
-        .interactive()
-        .add_params(_participant_selection, _repetition_selection)
-        .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
-    )
-    return (cd_cycling_capacity_time_chart,)
-
-
-@app.cell
-def _(cd_cycling_filtered_cycle_data):
-    # CHARGE-DISCHARGE CYCLING EVALUATION
-    # STEP 3b: Build boxplots from capacity data per participant to compare the capacity distributions between participants
-
-    # build domains for the capacity values
-    _all_capacity = cd_cycling_filtered_cycle_data["discharge_capacity/mAh"].abs()
-    _capacity_domain = [_all_capacity.min(), _all_capacity.max()]
-
-    # construct a box plot
-    cd_cycling_capacity_participant = (
-        (
-            alt.Chart(
-                cd_cycling_filtered_cycle_data,
-            )
-            .mark_boxplot(
-                size=50,
-                ticks={"size": 30},
-                median={"color": "black", "thickness": 2},
-                outliers={"size": 10, "shape": "circle"},
-            )
-            .encode(
-                x=alt.X("participant:N", title="Participant"),
-                y=alt.Y(
-                    "discharge_capacity/mAh:Q",
-                    title="(Discharge) Capacity / mAh",
-                    scale=alt.Scale(domain=_capacity_domain),
-                ),
-                color=alt.Color("participant:N", title="Participant"),
-                # opacity=alt.condition(_legend_sel, alt.value(1.0), alt.value(0.05)),
-            )
-        )
-        .properties(
-            title=alt.TitleParams(
-                text="Figure 11. Capacity distribution per participant",
-                subtitle=[
-                    "Boxplots showing the distribution of discharge capacity values for each participant",
-                    "across all cycles and all repetitions.",
-                ],
-                anchor="start",
-                orient="top",
-                offset=20,
-            ),
-            width=325,
-        )
-        .configure_axisX(labelAngle=-45)
-    )
-    return (cd_cycling_capacity_participant,)
-
-
-@app.cell
-def _(cd_cycling_filtered_cycle_data):
-    # CHARGE-DISCHARGE CYCLING EVALUATION
-    # STEP 3b: Build boxplots from capacity data per repetition to compare the capacity distributions between repetitions
-
-    # build domains for the capacity values
-    _all_capacity = cd_cycling_filtered_cycle_data["discharge_capacity/mAh"].abs()
-    _capacity_domain = [_all_capacity.min(), _all_capacity.max()]
-
-    # construct a box plot
-    cd_cycling_capacity_repetition = (
-        (
-            alt.Chart(
-                cd_cycling_filtered_cycle_data,
-            )
-            .mark_boxplot(
-                size=50,
-                ticks={"size": 30},
-                median={"color": "black", "thickness": 2},
-                outliers={"size": 10, "shape": "circle"},
-            )
-            .encode(
-                x=alt.X("repetition:O", title="Repetition"),
-                y=alt.Y(
-                    "discharge_capacity/mAh:Q",
-                    title="(Discharge) Capacity / mAh",
-                    scale=alt.Scale(domain=_capacity_domain),
-                ),
-                color=alt.Color("repetition:O", title="Repetition"),
-                # opacity=alt.condition(_legend_sel, alt.value(1.0), alt.value(0.05)),
-            )
-        )
-        .properties(
-            title=alt.TitleParams(
-                text="Figure 12. Capacity distribution per repetition",
-                subtitle=[
-                    "Boxplots showing the distribution of discharge capacity values for each repetition",
-                    "across all cycles and all participants.",
-                ],
-                anchor="start",
-                orient="top",
-                offset=20,
-            ),
-            width=325,
-        )
-        .configure_axisX(labelAngle=0)
-    )
-    return (cd_cycling_capacity_repetition,)
-
-
-@app.cell
-def section_charge_discharge_cycling(
-    cd_cycling_capacity_cycle_chart,
-    cd_cycling_capacity_participant,
-    cd_cycling_capacity_repetition,
-    cd_cycling_capacity_time_chart,
-    cd_cycling_charts,
-    cd_cycling_filtered_df,
-    cd_cycling_initial_discharge_capacity,
-    slider_half_cycle,
-    theoretical_capacity_mAh,
-):
-    mo.vstack(
-        [
-            mo.md("## Charge-Discharge Cycling"),
-            mo.md("""
-                This section allows you to visualize the results of the charge-discharge cycling experiments. You can select one or more files containing the charge-discharge data, and the notebook will generate visualizations to help you analyze the results and compare different repetitions and runs.
-            """),
-            mo.md("<br>"),
-            mo.md("### Raw data exploration"),
-            mo.md("""
-                The expandable sections enables you to explore the raw charge-discharge cycling data of all selected datasets in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
-            """),
-            mo.accordion(
-                {
-                    "Data table": cd_cycling_filtered_df,
-                    "Data explorer": mo.ui.data_explorer(cd_cycling_filtered_df),
-                },
-                lazy=True,
-                multiple=True,
-            ),
-            mo.md("<br>"),
-            mo.md("### Voltage-capacity data"),
-            mo.md("""
-                These plots show the relationship between the voltage and the capacity for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as the presence of different plateaus corresponding to different electrochemical reactions, changes in internal resistance, and capacity fade over cycles. You can compare the curves across different participants and repetitions to identify trends or differences in the charge-discharge behavior. Use the slider to select the cycle to display.
-            """),
-            mo.vstack(
-                [
-                    mo.md("**Select cycle:**"),
-                    slider_half_cycle,
-                    cd_cycling_charts,
-                ]
-            ),
-            mo.md("<br>"),
-            mo.md("### Capacity distribution per participant and repetition"),
-            mo.md(f"""
-                These plots show the distribution of capacity values across all cycles for each participant and repetition, respectively. The boxplots display the median, interquartile range, and outliers of the capacity values, allowing you to compare the capacity distributions between participants and repetitions and identify trends or differences in the capacity performance. The average **initial (discharge) capacity** over the selected dataset ({len(cd_cycling_initial_discharge_capacity)} experiments) is **{cd_cycling_initial_discharge_capacity["capacity/mAh"].mean():.1f} mAh ± {(cd_cycling_initial_discharge_capacity["capacity/mAh"].std() if len(cd_cycling_initial_discharge_capacity) > 1 else 0):.1f} mAh** (uncertainty: standard deviation), which represents an average **capacity utilization of {(cd_cycling_initial_discharge_capacity["capacity/mAh"].mean() / theoretical_capacity_mAh):.1%}** with respect to the theoretical capacity as per the protocol defined electrolyte composition (0.2 M redox-active species).
-            """),
-            mo.md("<br>"),
-            mo.hstack(
-                [
-                    cd_cycling_capacity_participant,
-                    cd_cycling_capacity_repetition,
-                ]
-            ),
-            mo.md("<br>"),
-            mo.md("### Capacity fade"),
-            mo.md("""
-                These plots show the capacity retention over cycles and time for each selected file. The first plot shows the capacity at the end of each half cycle (i.e., after each charge and discharge step, respectively) over the cycle number, while the second plot shows the capacity over time. You can use these plots to analyze the capacity fade behavior of the system and identify trends or differences between participants and repetitions.
-            """),
-            mo.md("<br>"),
-            cd_cycling_capacity_cycle_chart,
-            mo.md("<br>"),
-            cd_cycling_capacity_time_chart,
-            mo.md("<br>"),
-        ]
-    )
-    return
+# @app.cell
+# def _(combined_temperature_chart, temperature_data_df):
+#     # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
+#     # STEP 3: Display the content of the section and explain what it does
+
+#     mo.vstack(
+#         [
+#             mo.md("## Participant schedules and temperature data"),
+#             mo.md("""
+#                 This section displays the participant schedules and the temperature data recorded during the experiments. It was recorded by a Voltcraft DL-200T temperature logger at a sampling rate of one measurement every 60 s. The sensor was positioned at a central spot on a shelf within the laboratory (approximately 1 – 1.5 m away from each of the RFB experiments).
+#             """),
+#             mo.md("<br>"),
+#             mo.md("### Raw data exploration"),
+#             mo.md("""
+#                 The expandable sections enables you to explore the raw temperature data in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
+#             """),
+#             mo.accordion(
+#                 {
+#                     "Data table": temperature_data_df,
+#                     "Data explorer": mo.ui.data_explorer(temperature_data_df),
+#                 },
+#                 lazy=True,
+#                 multiple=True,
+#             ),
+#             mo.md("<br>"),
+#             mo.md("### Participant schedules and temperature over time"),
+#             mo.md(
+#                 f"""
+#                 The plot shows the participant schedules and the temperature data over time. You can use this plot to analyze the temperature behavior during the experiments and identify trends or differences between different time periods. The **average temperature** over the recorded time period was **{temperature_data_df["temperature/°C"].mean():.1f} °C ± {(temperature_data_df["temperature/°C"].std() if len(temperature_data_df) > 1 else 0):.1f} °C** (uncertainty: standard deviation) with a **minimum temperature of {temperature_data_df["temperature/°C"].min()} °C** and **maximum temperature of {temperature_data_df["temperature/°C"].max()} °C**.
+#                 """
+#             )
+#             if not temperature_data_df.is_empty()
+#             else mo.md(
+#                 "No temperature data is currently available for the selected study phase."
+#             ),
+#             mo.md("<br>"),
+#             combined_temperature_chart,
+#         ]
+#     )
+#     return
+
+
+# @app.cell
+# def _(data_structure_df, load_file, load_precomputed_df):
+#     # IMPEDANCE SPECTROSCOPY EVALUATION
+#     # STEP 1a: Load ALL EIS files from the full data_structure_df into a single flat DataFrame.
+#     # Filtering by UI selectors is applied later at chart/computation time.
+
+#     if is_wasm():
+#         eis_flat_df = load_precomputed_df("eis_flat_df")
+#     else:
+#         # filter out impedance spectroscopy files from the full (unfiltered) structure
+#         _df_eis = data_structure_df.filter(pl.col("technique") == "01 eis")
+
+#         # load each file (cached via @mo.persistent_cache) and concatenate
+#         # into a single flat DataFrame with metadata columns
+#         _frames = []
+#         for _row in _df_eis.iter_rows(named=True):
+#             try:
+#                 _data = load_file(_row["file_path"], ["PEIS", "GEIS"])
+#             except Exception as e:
+#                 print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
+#                 continue
+#             if _data is not None:
+#                 # rename columns to have consistent naming across files
+#                 _data = _data.rename(
+#                     {
+#                         "cycle number": "cycle",
+#                     },
+#                     strict=False,
+
+#                 )
+
+#                 _frames.append(
+#                     _data.with_columns(
+#                         pl.lit(_row["study_phase"]).alias("study_phase"),
+#                         pl.lit(_row["participant"]).alias("participant"),
+#                         pl.lit(_row["repetition"]).alias("repetition"),
+#                         pl.lit(_row["flow_rate"]).alias("flow_rate"),
+#                         # shift study_phase, etc. to the leftmost position for easier access later on
+#                     ).select(
+#                         [
+#                             "study_phase",
+#                             "participant",
+#                             "repetition",
+#                             "flow_rate",
+#                             *[
+#                                 col
+#                                 for col in _data.columns
+#                                 if col
+#                                 not in [
+#                                     "study_phase",
+#                                     "participant",
+#                                     "repetition",
+#                                     "flow_rate",
+#                                 ]
+#                             ],
+#                         ]
+#                     )
+#                 )
+
+#         eis_flat_df = (
+#             pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
+#         )
+#     return (eis_flat_df,)
+
+
+# @app.cell
+# def _(
+#     eis_flat_df,
+#     flow_rate_selector,
+#     participant_selector,
+#     recalculate_time,
+#     repetition_selector,
+#     study_phase_selector,
+# ):
+#     # IMPEDANCE SPECTROSCOPY EVALUATION
+#     # STEP 1b: Filter the EIS data according to the UI selectors
+
+#     # apply UI filter to the flat EIS DataFrame
+#     eis_filtered_df = eis_flat_df.filter(
+#         pl.col("study_phase").is_in([study_phase_selector.value])
+#         & pl.col("participant").is_in(participant_selector.value)
+#         & pl.col("repetition").is_in(repetition_selector.value)
+#         & pl.col("flow_rate").is_in(flow_rate_selector.value)
+#     )
+#     mo.stop(
+#         eis_filtered_df.is_empty(),
+#     )
+
+#     # recalculate time/s from datetime column for each group (study_phase, participant, repetition, flow_rate)
+#     # NOTE: We do this to properly handle multiple files in one experiment folder and then keep only the last cycle in the next step
+#     eis_filtered_df = recalculate_time(eis_filtered_df)
+
+#     # keep only the last cycle of each group
+#     eis_filtered_df = (
+
+#         eis_filtered_df.with_columns(
+#             pl.col("cycle").max().over(
+#                 "study_phase", 
+#                 "participant", 
+#                 "repetition", 
+#                 "flow_rate"
+#             )
+#             .alias("max_cycle")
+#         ).filter(
+#             pl.col("cycle") == pl.col("max_cycle")
+#         ).drop("max_cycle")
+#     )
+#     return (eis_filtered_df,)
+
+
+# @app.cell
+# def _(eis_filtered_df, wheel_zoom_x, wheel_zoom_xy, wheel_zoom_y):
+#     # IMPEDANCE SPECTROSCOPY EVALUATION
+#     # STEP 2: Plot the Nyquist plots for the selected files
+
+#     # compute per-axis data ranges, then build centered domains with equal span
+#     _re_min = eis_filtered_df["Re(Z)/Ohm"].min()
+#     _re_max = eis_filtered_df["Re(Z)/Ohm"].max()
+#     _im_min = eis_filtered_df["-Im(Z)/Ohm"].min()
+#     _im_max = eis_filtered_df["-Im(Z)/Ohm"].max()
+
+#     # use the larger of the two ranges so both axes cover the same span
+#     _re_range = _re_max - _re_min
+#     _im_range = _im_max - _im_min
+#     _max_range = max(_re_range, _im_range)
+#     _padding = _max_range * 0.05
+
+#     # center each axis's domain around its own midpoint
+#     _re_mid = (_re_min + _re_max) / 2
+#     _im_mid = (_im_min + _im_max) / 2
+#     _half = (_max_range / 2) + _padding
+#     _re_domain = [_re_mid - _half, _re_mid + _half]
+#     _im_domain = [_im_mid - _half, _im_mid + _half]
+
+#     # create selectors and bind them to the legend
+#     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
+#     _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
+#     _flow_rate_selection = alt.selection_point(fields=["flow_rate"], bind="legend")
+
+#     # select only columns needed for the chart
+#     _chart_data = eis_filtered_df.select(
+#         [
+#             "study_phase",
+#             "participant",
+#             "repetition",
+#             "flow_rate",
+#             "cycle",
+#             "Re(Z)/Ohm",
+#             "-Im(Z)/Ohm",
+#             "freq/Hz",
+#         ]
+#     )
+
+#     # build Nyquist plot from single flat DataFrame
+#     nyquist_plots = (
+#         (
+#             alt.Chart(_chart_data)
+#             .mark_point()
+#             .encode(
+#                 x=alt.X(
+#                     "Re(Z)/Ohm:Q",
+#                     title="Re(Z) / Ω",
+#                     scale=alt.Scale(domain=_re_domain),
+#                 ),
+#                 y=alt.Y(
+#                     "-Im(Z)/Ohm:Q",
+#                     title="-Im(Z) / Ω",
+#                     scale=alt.Scale(domain=_im_domain),
+#                 ),
+#                 color=alt.Color("participant:N", title="Participant"),
+#                 shape=alt.Shape("repetition:N", title="Repetition"),
+#                 size=alt.Size(
+#                     "flow_rate:N",
+#                     title="Flow Rate (mL min⁻¹)",
+#                     scale=alt.Scale(range=[30, 150]),
+#                 ),
+#                 opacity=alt.condition(
+#                     _participant_selection
+#                     & _repetition_selection
+#                     & _flow_rate_selection,
+#                     alt.value(1.0),
+#                     alt.value(0.025),
+#                 ),
+#                 tooltip=[
+#                     "study_phase:O",
+#                     "participant:N",
+#                     "repetition:O",
+#                     "flow_rate:O",
+#                     "cycle:O",
+#                     alt.Tooltip("freq/Hz:Q", format=".1f"),
+#                     "Re(Z)/Ohm:Q",
+#                     "-Im(Z)/Ohm:Q",
+#                 ],
+#             )
+#             .properties(
+#                 title="Nyquist Plot",
+#                 width=400,
+#                 height=400,
+#             )
+#             .add_params(
+#                 _participant_selection,
+#                 _repetition_selection,
+#                 _flow_rate_selection,
+#             )
+#         )
+#         .properties(
+#             title=alt.TitleParams(
+#                 text="Figure 1. Nyquist plots for selected participants and repetitions",
+#                 subtitle="Nyquist plots showing the real and imaginary parts of the impedance for each selected file.",
+#                 anchor="start",
+#                 orient="top",
+#                 offset=20,
+#             )
+#         )
+#         .interactive()
+#         .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
+#     )
+#     return (nyquist_plots,)
+
+
+# @app.cell
+# def _(eis_filtered_df, get_x_intercepts):
+#     # IMPEDANCE SPECTROSCOPY EVALUATION
+#     # STEP 3a: Extract the ohmic series resistance from the EIS data into a separate dataframe
+
+#     # partition by metadata columns and compute x-intercepts per group,
+#     # since get_x_intercepts uses .over(group) internally and "cycle number"
+#     # values repeat across different files
+#     _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
+#     series_resistance_df = pl.concat(
+#         [
+#             get_x_intercepts(
+#                 df=group_df,
+#                 x="Re(Z)/Ohm",
+#                 y="-Im(Z)/Ohm",
+#                 group="cycle",
+#                 which="last",
+#                 assume_sorted=False,
+#             )
+#             .with_columns(pl.lit(group_df[col][0]).alias(col) for col in _meta_cols)
+#             .select(
+#                 *_meta_cols,
+#                 pl.col("cycle"),
+#                 pl.col("x_intercept").alias("ESR/Ohm"),
+#             )
+#             for group_df in eis_filtered_df.partition_by(_meta_cols, as_dict=False)
+#         ],
+#         how="vertical_relaxed",
+#     )
+#     return (series_resistance_df,)
+
+
+# @app.cell
+# def esr_per_participant_1(series_resistance_df):
+#     # IMPEDANCE SPECTROSCOPY EVALUATION
+#     # STEP 3b: Plot series resistance values per participants (mean value over repetitions)
+#     #          with error bars representing the standard deviation of the mean)
+
+#     # create a bar chart to compare the ESR values across participants and repetitions
+#     series_resistance_per_participant = series_resistance_df.group_by(
+#         "study_phase",
+#         "participant",
+#         "flow_rate",
+#     ).agg(
+#         pl.col("ESR/Ohm").mean().alias("mean_esr"),
+#         pl.col("ESR/Ohm").std().alias("std_esr"),
+#         pl.len().alias("cycles"),
+#     ).sort(["study_phase", "participant", "flow_rate"])
+
+#     _bars = (
+#         alt.Chart(series_resistance_per_participant)
+#         .mark_bar(
+#             opacity=1
+#         )
+#         .encode(
+#             x=alt.X("participant:N", title="Participant"),
+#             y=alt.Y("mean_esr:Q", title="Mean ESR / Ohm"),
+#             xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
+#             color=alt.Color("participant:N", title="Participant"),
+#             opacity=alt.Opacity("flow_rate:N", title="Flow Rate", scale=alt.Scale(range=[0.33, 1.0])),
+#             tooltip=[
+#                 "study_phase:N",
+#                 "participant:N",
+#                 "flow_rate:O",
+#                 alt.Tooltip("mean_esr:Q", format=".4f"),
+#                 alt.Tooltip("std_esr:Q", format=".4f"),
+#                 "cycles:O",
+#             ],
+#         )
+#     )
+
+#     _errs = (
+#         alt.Chart(series_resistance_per_participant)
+#         .mark_errorbar(
+#             ticks=True,
+#             size=10,
+#         )
+#         .encode(
+#             x="participant:N",
+#             y=alt.Y("mean_esr:Q", title="Mean ESR / Ohm"),
+#             yError="std_esr:Q",
+#             xOffset="flow_rate:O",
+#             color=alt.value("#000000"),
+#         )
+#     )
+
+#     series_resistance_per_participant_plot = (
+#         alt.layer(_bars, _errs)
+#         .properties(
+#             title=alt.TitleParams(
+#                 text="Figure 2. ESR per participant",
+#                 subtitle="ESR values for each participant across selected repetitions.",
+#                 anchor="start",
+#                 orient="top",
+#                 offset=20,
+#             ),
+#             width=325,
+#         )
+#         .configure_axisX(
+#             labelAngle=-45
+#         )
+#     )
+#     return (series_resistance_per_participant_plot,)
+
+
+# @app.cell
+# def esr_per_repetition(series_resistance_df):
+#     # IMPEDANCE SPECTROSCOPY EVALUATION
+#     # STEP 3c: Plot series resistance values over repetition (mean value over participants)
+#     #          with error bars representing the standard deviation of the mean)
+
+#     # create a bar chart to compare the ESR values across participants and repetitions
+#     series_resistance_per_repetition = series_resistance_df.group_by(
+#         "study_phase",
+#         "repetition",
+#         "flow_rate",
+#     ).agg(
+#         pl.col("ESR/Ohm").mean().alias("mean_esr"),
+#         pl.col("ESR/Ohm").std().alias("std_esr"),
+#         pl.len().alias("cycles"),
+#     ).sort(["study_phase", "repetition", "flow_rate"])
+
+#     # build domains for the ESR values
+#     _all_esr = series_resistance_df["ESR/Ohm"]
+#     _all_mean_esr = series_resistance_per_repetition["mean_esr"]
+#     _esr_domain = [_all_esr.min() / 1.1, _all_esr.max() * 1.1]
+#     _mean_esr_domain = [_all_mean_esr.min() / 1.1, _all_mean_esr.max() * 1.1]
+
+#     # construct a box plot
+#     _boxplot = (
+#         alt.Chart(
+#             series_resistance_df,
+#         )
+#         .mark_boxplot(
+#             size=25,
+#             ticks={"size": 10},
+#             median={"color": "black", "thickness": 2},
+#             outliers={"size": 15, "shape": "circle"},
+#         )
+#         .encode(
+#             x=alt.X("repetition:O", title="Repetition"),
+#             y=alt.Y(
+#                 "ESR/Ohm:Q", title="ESR / Ohm", scale=alt.Scale(domain=_esr_domain)
+#             ),
+#             xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
+#             color=alt.Color("repetition:O", title="Repetition"),
+#             opacity=alt.Opacity("flow_rate:O", title="Flow Rate", scale=alt.Scale(range=[1, 0.33])),
+#         )
+#     )
+
+#     _mean = (
+#         alt.Chart(series_resistance_per_repetition)
+#         .mark_point(
+#             color="black",
+#             opacity=0.75,
+#             shape="circle",
+#             size=50,
+#         )
+#         .encode(
+#             x=alt.X("repetition:O", title="Repetition"),
+#             y=alt.Y(
+#                 "mean_esr:Q",
+#                 title="Mean ESR / Ohm",
+#                 scale=alt.Scale(domain=_esr_domain),
+#             ),
+#             xOffset="flow_rate:O",
+#             tooltip=[
+#                 "study_phase:N",
+#                 "flow_rate:O",
+#                 alt.Tooltip("mean_esr:Q", format=".4f"),
+#                 alt.Tooltip("std_esr:Q", format=".4f"),
+#                 "cycles:Q",
+#             ],
+#         )
+#     )
+
+#     series_resistance_per_repetition_plot = (
+#         alt.layer(_boxplot, _mean)
+#         .resolve_scale(y="shared")
+#         .resolve_axis(y="shared")
+#         .properties(
+#             title=alt.TitleParams(
+#                 text="Figure 3. ESR per repetition",
+#                 subtitle="ESR values for each repetition across selected participants.",
+#                 anchor="start",
+#                 orient="top",
+#                 offset=20,
+#             ),
+#             width=325,
+#         )
+#         .configure_axisX(labelAngle=0)
+#     )
+#     return (series_resistance_per_repetition_plot,)
+
+
+# @app.cell
+# def section_impedance_spectroscopy(
+#     eis_filtered_df,
+#     nyquist_plots,
+#     series_resistance_per_participant_plot,
+#     series_resistance_per_repetition_plot,
+# ):
+#     # IMPEDANCE SPECTROSCOPY EVALUATION
+#     # STEP 4: Display the content of the section and explain what it does
+
+#     # display section content
+#     mo.vstack(
+#         [
+#             mo.md("## Impedance Spectroscopy"),
+#             mo.md("""
+#                 This section allows you to visualize the results of the Impedance Spectroscopy experiments. You can select one or more files containing the EIS data, and the notebook will generate Nyquist plots, extract ohmic series resistances for each selected file, and compare different repetitions and runs.
+#             """),
+#             mo.md("<br>"),
+#             mo.md("### Raw data exploration"),
+#             mo.md("""
+#                 The expandable sections enables you to explore the raw EIS data of all selected datasets in more detail. You can view the data in a tabular format and apply filter and computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
+#             """),
+#             mo.accordion(
+#                 {
+#                     "Data table": mo.ui.dataframe(eis_filtered_df),
+#                     "Data explorer": mo.ui.data_explorer(eis_filtered_df),
+#                 },
+#                 lazy=True,
+#                 multiple=True,
+#             ),
+#             mo.md("<br>"),
+#             mo.md("### Nyquist plots"),
+#             mo.md("""
+#                 These Nyquist plots show the relationship between the real and imaginary parts of the impedance grouped by participant. Each point on the plot corresponds to a specific frequency, and the shape of the plot can provide insights into the electrochemical processes occurring in the system.
+#             """),
+#             mo.md("<br>"),
+#             nyquist_plots,
+#             mo.md("<br>"),
+#             mo.md("### Ohmic series resistance (ESR) comparison"),
+#             mo.md("""
+#                 These plots compare the extracted ohmic series resistance (ESR) values across participants and repetitions. To keep it simple, the ESR was not fitted via a Randles circuit but simply estimated from the intercept of the Nyquist plots with the Re(Z)-axis. The first plot shows the mean ESR values for each participant with error bars representing the standard deviation across repetitions. The second plot shows the mean ESR values for each repetition with error bars representing the standard deviation across participants. You can use these plots to identify trends or differences in ESR values between participants and repetitions.
+#             """),
+#             mo.md("<br>"),
+#             mo.hstack(
+#                 [
+#                     series_resistance_per_participant_plot,
+#                     series_resistance_per_repetition_plot,
+#                 ],
+#                 widths="equal",
+#                 gap=0,
+#             ),
+#             mo.md("<br>"),
+#         ]
+#     )
+#     return
+
+
+# @app.cell
+# def _(data_structure_df, load_file, load_precomputed_df):
+#     # POLARISATION DATA EVALUATION
+#     # STEP 1a: Load ALL polarisation files from the full data_structure_df into a single flat DataFrame.
+
+#     if is_wasm():
+#         polarisation_flat_df = load_precomputed_df("polarisation_flat_df")
+#     else:
+#         # filter out polarisation files from the full (unfiltered) structure
+#         _df_pol = data_structure_df.filter(pl.col("technique") == "02 polarisation")
+
+#         # load each file (cached per file via @mo.persistent_cache) and concatenate
+#         # into a single flat DataFrame with metadata columns
+#         _frames = []
+#         for _row in _df_pol.iter_rows(named=True):
+#             try:
+#                 _data = load_file(_row["file_path"], ["CP"])    
+#             except Exception as e:
+#                 print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
+#                 continue
+#             if _data is not None:
+#                 # rename current and voltage columns
+#                 _data = _data.rename(
+#                     {
+#                         "<I>/mA": "current/mA",
+#                         "I/mA": "current/mA",
+#                         "<Ewe>/V": "voltage/V",
+#                         "Ewe/V": "voltage/V",
+#                         "cycle number": "cycle",
+#                     },
+#                     strict=False,
+#                 )
+#                 _frames.append(
+#                     _data.with_columns(
+#                         pl.lit(_row["study_phase"]).alias("study_phase"),
+#                         pl.lit(_row["participant"]).alias("participant"),
+#                         pl.lit(_row["repetition"]).alias("repetition"),
+#                         pl.lit(_row["flow_rate"]).alias("flow_rate"),
+#                         # shift study_phase, etc. to the leftmost position for easier access later on
+#                     ).select(
+#                         [
+#                             "study_phase",
+#                             "participant",
+#                             "repetition",
+#                             "flow_rate",
+#                             *[
+#                                 col
+#                                 for col in _data.columns
+#                                 if col
+#                                 not in [
+#                                     "study_phase",
+#                                     "participant",
+#                                     "repetition",
+#                                     "flow_rate",
+#                                 ]
+#                             ],
+#                         ]
+#                     )
+#                 )
+
+#         polarisation_flat_df = (
+#             pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
+#         )
+#     return (polarisation_flat_df,)
+
+
+# @app.cell
+# def _(
+#     flow_rate_selector,
+#     participant_selector,
+#     polarisation_flat_df,
+#     recalculate_time,
+#     repetition_selector,
+#     study_phase_selector,
+# ):
+#     # POLARISATION DATA EVALUATION
+#     # STEP 1b: Filter the polarisation data according to the UI selectors
+
+#     # apply UI filter
+#     polarisation_filtered_df = polarisation_flat_df.filter(
+#         pl.col("study_phase").is_in([study_phase_selector.value])
+#         & pl.col("participant").is_in(participant_selector.value)
+#         & pl.col("repetition").is_in(repetition_selector.value)
+#         & pl.col("flow_rate").is_in(flow_rate_selector.value)
+#     )
+#     mo.stop(
+#         polarisation_filtered_df.is_empty(),
+#     )
+
+#     # recalculate time/s from datetime column for each group (study_phase, participant, repetition, flow_rate)
+#     # NOTE: We do this to properly handle multiple files in one experiment folder
+#     polarisation_filtered_df = recalculate_time(polarisation_filtered_df)
+#     return (polarisation_filtered_df,)
+
+
+# @app.cell
+# def _(polarisation_filtered_df):
+#     # POLARISATION DATA EVALUATION
+#     # STEP 2a: Plot the time-voltage curves
+
+#     # shift time to start at 0 per file (identified by metadata group)
+#     _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
+#     _chart_data = polarisation_filtered_df.with_columns(
+#         (pl.col("time/s") - pl.col("time/s").min()).over(_meta_cols).alias("time/s"),
+#     ).select(
+#         [
+#             *_meta_cols,
+#             "Ns",
+#             "time/s",
+#             "voltage/V",
+#             "current/mA",
+#         ]
+#     )
+
+#     # downsample the data for better performance in the plot
+#     _downsampled_chart_data = (
+#         _chart_data.sort(
+#             [
+#                 *_meta_cols,
+#                 "time/s",
+#             ]
+#         )
+#         .with_columns(
+#             pl.int_range(0, pl.len()).over([*_meta_cols, "Ns"]).alias("_i")
+#         )
+#         .filter((pl.col("_i") % 10) == 0)
+#         .drop("_i")
+#     )
+
+#     # create selectors and bind them to the legend
+#     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
+#     _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
+#     _flow_rate_selection = alt.selection_point(fields=["flow_rate"], bind="legend")
+
+#     # build polarisation plot from single flat DataFrame
+#     polarisation_plots = (
+#         alt.Chart(_downsampled_chart_data)
+#         .mark_point()
+#         .encode(
+#             x=alt.X("time/s", title="Time / s"),
+#             y=alt.Y("voltage/V", title="Voltage / V"),
+#             color=alt.Color("participant:N", title="Participant"),
+#             shape=alt.Shape("repetition:N", title="Repetition"),
+#             size=alt.Size(
+#                 "flow_rate:N",
+#                 title="Flow Rate (mL/min⁻¹)",
+#                 scale=alt.Scale(range=[30, 150]),
+#             ),
+#             opacity=alt.condition(
+#                 _participant_selection 
+#                 & _repetition_selection
+#                 & _flow_rate_selection,
+#                 alt.value(1.0),
+#                 alt.value(0.0),
+#             ),
+#             tooltip=[
+#                 "participant:N",
+#                 "repetition:O",
+#                 "flow_rate:Q",
+#                 alt.Tooltip("time/s:Q", format=".1f"),
+#                 alt.Tooltip("voltage/V:Q", format=".4f"),
+#             ],
+#         )
+#         .properties(
+#             title="Polarisation Plot",
+#         )
+#         .add_params(_participant_selection, _repetition_selection, _flow_rate_selection)
+#     ).properties(
+#         title=alt.TitleParams(
+#             text="Figure 4. Current-overvoltage curves for selected participants and repetitions",
+#             subtitle="Current-overvoltage curves showing the relationship between current and overvoltage for each selected file.",
+#             anchor="start",
+#             orient="top",
+#             offset=20,
+#         ),
+#         height=400,
+#     )
+#     return (polarisation_plots,)
+
+
+# @app.cell
+# def _(get_linregress_params, polarisation_filtered_df):
+#     # POLARISATION DATA EVALUATION
+#     # STEP 3a: Calculate the polarisation resistances based on the step voltages and applied currents (using a linear regression)
+
+#     # define evaluation parameters
+#     step_evaluation_tail_length = 10  # number of samples from the end of each step to consider for the evaluation
+#     rest_current_tolerance = 1        # rest current tolerance (± X mA) to filter out rest steps
+
+#     # aggregate the data: group_by now includes metadata columns alongside Ns
+#     _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
+#     polarisation_current_voltage_df = (
+#         polarisation_filtered_df.group_by(
+#             *_meta_cols,
+#             "Ns",
+#             maintain_order=True,
+#         )
+#         .agg(
+#             pl.col("voltage/V")
+#             .tail(step_evaluation_tail_length)
+#             .median()
+#             .alias("voltage/V"),
+#             pl.col("current/mA")
+#             .tail(step_evaluation_tail_length)
+#             .median()
+#             .alias("current/mA"),
+#         )
+#         .with_columns(
+#             (pl.col("voltage/V") / pl.col("current/mA") * 1000).alias(
+#                 "polarisation_resistance/Ohm"
+#             ),
+#         )
+#         .select(
+#             [
+#                 *_meta_cols,
+#                 "Ns",
+#                 "voltage/V",
+#                 "current/mA",
+#                 "polarisation_resistance/Ohm",
+#             ]
+#         )
+#     )
+
+#     # drop rows where current is close to zero (rest steps) based on the defined tolerance
+#     polarisation_current_voltage_df = polarisation_current_voltage_df.filter(
+#         (pl.col("current/mA").abs() > rest_current_tolerance)
+#     ).sort([*_meta_cols, "Ns"])
+
+#     # perform linear regression on grouped data to get polarisation resistance as slope of the voltage-current curve for each participant, repetition, and flow rate
+#     polarisation_resistance_df = (
+#         polarisation_current_voltage_df.group_by(
+#             *_meta_cols,
+#         )
+#         .map_groups(
+#             lambda df: get_linregress_params(
+#                 df=df,
+#                 x_name="current/mA",
+#                 y_name="voltage/V",
+#                 with_columns=[
+#                     *_meta_cols,
+#                     "Ns",
+#                     "current/mA",
+#                     "voltage/V",
+#                 ],
+#             )
+#         )
+#         .with_columns(
+#             (pl.col("slope") * 1000).alias("polarisation_resistance/Ohm"),
+#             (pl.col("stderr") * 1000).alias("polarisation_resistance_stderr/Ohm"),
+#         )
+#         .select(
+#             [
+#                 *_meta_cols,
+#                 "Ns",
+#                 "voltage/V",
+#                 "current/mA",
+#                 "polarisation_resistance/Ohm",
+#                 "polarisation_resistance_stderr/Ohm",
+#             ]
+#         )
+#         .sort([*_meta_cols, "Ns"])
+#     )
+#     return (
+#         polarisation_current_voltage_df,
+#         polarisation_resistance_df,
+#         step_evaluation_tail_length,
+#     )
+
+
+# @app.cell
+# def _(polarisation_current_voltage_df):
+#     # POLARISATION DATA EVALUATION
+#     # STEP 3b: Plot the step voltage over the step current
+
+#     # compute per-axis data ranges, then build domains with some padding
+#     _all_currents = polarisation_current_voltage_df["current/mA"].abs()
+#     _current_max = _all_currents.max()
+#     _current_domain = [-_current_max * 1.1, _current_max * 1.1]
+
+#     # selectors bound to legends
+#     _participant_selection = alt.selection_point(encodings=["color"], bind="legend")
+#     _repetition_selection = alt.selection_point(encodings=["shape"], bind="legend")
+#     _flow_rate_selection = alt.selection_point(encodings=["size"], bind="legend")
+
+#     points = (
+#         alt.Chart(polarisation_current_voltage_df)
+#         .mark_point(filled=True, size=50)
+#         .encode(
+#             x=alt.X(
+#                 "current/mA:Q",
+#                 title="Current / mA",
+#                 scale=alt.Scale(domain=_current_domain),
+#             ),
+#             y=alt.Y("voltage/V:Q", title="Voltage / V"),
+#             color=alt.Color("participant:N", title="Participant"),
+#             shape=alt.Shape("repetition:N", title="Repetition"),
+#             size=alt.Size(
+#                 "flow_rate:N",
+#                 title="Flow Rate (mL min⁻¹)",
+#                 scale=alt.Scale(range=[30, 150]),
+#             ),
+#             opacity=alt.condition(
+#                 _participant_selection
+#                 & _repetition_selection
+#                 & _flow_rate_selection,
+#                 alt.value(1.0),
+#                 alt.value(0.05),
+#             ),
+#             tooltip=[
+#                 "participant:N",
+#                 "repetition:O",
+#                 "flow_rate:Q",
+#                 alt.Tooltip("current/mA:Q", format=".1f"),
+#                 alt.Tooltip("voltage/V:Q", format=".4f"),
+#             ],
+#         )
+#     )
+
+#     regression_lines = (
+#         alt.Chart(polarisation_current_voltage_df)
+#         .transform_regression(
+#             "current/mA", "voltage/V", groupby=["participant", "repetition"]
+#         )
+#         .mark_line()
+#         .encode(
+#             x="current/mA:Q",
+#             y="voltage/V:Q",
+#             color=alt.Color("participant:N", title="Participant"),
+#             strokeDash=alt.StrokeDash(
+#                 "repetition:N", title="Repetition", legend=None
+#             ),  # dash in plot
+#             opacity=alt.condition(
+#                 _participant_selection
+#                 & _repetition_selection
+#                 & _flow_rate_selection,
+#                 alt.value(1.0),
+#                 alt.value(0.05),
+#             ),
+#         )
+#     )
+
+#     polarisation_voltage_current_plots = (
+#         alt.layer(points, regression_lines)
+#         .add_params(_participant_selection, _repetition_selection, _flow_rate_selection)
+#         .resolve_legend(color="shared", shape="shared", strokeDash="shared")
+#     )
+
+#     # polarisation_voltage_current_plots
+#     return (polarisation_voltage_current_plots,)
+
+
+# @app.cell
+# def _(polarisation_resistance_df):
+#     # POLARISATION DATA EVALUATION
+#     # STEP 3c: Plot polarisation resistance values per participants (mean value over repetitions)
+#     #          with error bars representing the standard deviation of the mean)
+
+#     # create a bar chart to compare the ESR values across participants and repetitions
+#     polarisation_resistance_per_participant = polarisation_resistance_df.group_by(
+#         "study_phase",
+#         "participant",
+#         "flow_rate",
+#     ).agg(
+#         pl.col("polarisation_resistance/Ohm").mean().alias("mean_resistance"),
+#         pl.col("polarisation_resistance/Ohm").std().alias("std_resistance"),
+#         pl.len().alias("cycles"),
+#     )
+
+#     # create selectors and bind them to the legend
+#     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
+
+#     _bars = (
+#         alt.Chart(polarisation_resistance_per_participant)
+#         .mark_bar()
+#         .encode(
+#             x=alt.X("participant:O", title="Participant"),
+#             y=alt.Y("mean_resistance:Q", title="Polarisation Resistance / Ohm"),
+#             xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
+#             color=alt.Color("participant:N", title="Study Phase"),
+#             opacity=alt.Opacity("flow_rate:N", title="Flow Rate", scale=alt.Scale(range=[1.0, 0.5])),
+#             tooltip=[
+#                 "study_phase:O",
+#                 "participant:O",
+#                 "flow_rate:O",
+#                 alt.Tooltip("mean_resistance:Q", format=".4f"),
+#                 alt.Tooltip("std_resistance:Q", format=".4f"),
+#                 "cycles:Q",
+#             ],
+#         )
+#         .add_params(
+#             _participant_selection,
+#         )
+#     )
+
+#     _errs = (
+#         alt.Chart(polarisation_resistance_per_participant)
+#         .mark_errorbar(
+#             ticks=True,
+#             size=10,
+#         )
+#         .encode(
+#             x="participant:O",
+#             y=alt.Y("mean_resistance:Q", title="Polarisation Resistance / Ohm"),
+#             yError="std_resistance:Q",
+#             xOffset="flow_rate:O",
+#             color=alt.value("#000000"),
+#         )
+#         .add_params(
+#             _participant_selection,
+#         )
+#     )
+
+#     polarisation_resistance_per_participant_plot = (
+#         alt.layer(_bars, _errs)
+#         .properties(
+#             title=alt.TitleParams(
+#                 text="Figure 6. Polarisation resistance per participant",
+#                 subtitle="Mean polarisation resistance values for each participant across selected repetitions.",
+#                 anchor="start",
+#                 orient="top",
+#                 offset=20,
+#             ),
+#             width=325,
+#         )
+#         .configure_axisX(labelAngle=-45)
+#     )
+#     return (polarisation_resistance_per_participant_plot,)
+
+
+# @app.cell
+# def _(polarisation_resistance_df):
+#     # POLARISATION DATA EVALUATION
+#     # STEP 3d: Plot polarisation resistance values over repetition (mean value over participants)
+#     #          with error bars representing the standard deviation of the mean)
+
+#     # create a bar chart to compare the ESR values across participants and repetitions
+#     polarisation_resistance_per_repetition = polarisation_resistance_df.group_by(
+#         "study_phase",
+#         "repetition",
+#         "flow_rate",
+#     ).agg(
+#         pl.col("polarisation_resistance/Ohm").mean().alias("mean_resistance"),
+#         pl.col("polarisation_resistance/Ohm").std().alias("std_resistance"),
+#         pl.len().alias("cycles"),
+#     )
+
+#     # build domains for the polarisation resistance values
+#     _all_resistance = polarisation_resistance_df["polarisation_resistance/Ohm"]
+#     _all_mean_resistance = polarisation_resistance_per_repetition["mean_resistance"]
+#     _resistance_domain = [_all_resistance.min() / 1.1, _all_resistance.max() * 1.1]
+#     _mean_resistance_domain = [
+#         _all_mean_resistance.min() / 1.1,
+#         _all_mean_resistance.max() * 1.1,
+#     ]
+
+#     # construct a box plot
+#     _boxplot = (
+#         alt.Chart(
+#             polarisation_resistance_df,
+#         )
+#         .mark_boxplot(
+#             size=25,
+#             ticks={"size": 10},
+#             median={"color": "black", "thickness": 2},
+#             outliers={"size": 15, "shape": "circle"},
+#         )
+#         .encode(
+#             x=alt.X("repetition:O", title="Repetition"),
+#             y=alt.Y(
+#                 "polarisation_resistance/Ohm:Q",
+#                 title="Polarisation Resistance / Ohm",
+#                 scale=alt.Scale(domain=_resistance_domain),
+#             ),
+#             xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
+#             color=alt.Color("repetition:O", title="Repetition"),
+#             opacity=alt.Opacity("flow_rate:O", title="Flow Rate", scale=alt.Scale(range=[1, 0.33])),
+#         )
+#     )
+
+#     _mean = (
+#         alt.Chart(polarisation_resistance_per_repetition)
+#         .mark_point(
+#             color="black",
+#             opacity=0.75,
+#             shape="circle",
+#             size=50,
+#         )
+#         .encode(
+#             x=alt.X("repetition:O", title="Repetition"),
+#             y=alt.Y(
+#                 "mean_resistance:Q",
+#                 title="Polarisation Resistance / Ohm",
+#                 scale=alt.Scale(domain=_mean_resistance_domain),
+#             ),
+#             xOffset="flow_rate:O",
+#             tooltip=[
+#                 "study_phase:O",
+#                 "flow_rate:O",
+#                 alt.Tooltip("mean_resistance:Q", format=".4f"),
+#                 alt.Tooltip("std_resistance:Q", format=".4f"),
+#                 "cycles:Q",
+#             ],
+#         )
+#     )
+
+#     polarisation_resistance_per_repetition_plot = (
+#         alt.layer(_boxplot, _mean)
+#         .properties(
+#             title=alt.TitleParams(
+#                 text="Figure 7. Polarisation resistance per repetition",
+#                 subtitle="Polarisation resistance values for each repetition across selected participants.",
+#                 anchor="start",
+#                 orient="top",
+#                 offset=20,
+#             ),
+#             width=325,
+#         )
+#         .configure_axisX(labelAngle=0)
+#     )
+#     return (polarisation_resistance_per_repetition_plot,)
+
+
+# @app.cell
+# def section_polarisation(
+#     polarisation_filtered_df,
+#     polarisation_plots,
+#     polarisation_resistance_per_participant_plot,
+#     polarisation_resistance_per_repetition_plot,
+#     polarisation_voltage_current_plots,
+#     step_evaluation_tail_length,
+# ):
+#     # display section content
+#     mo.vstack(
+#         [
+#             mo.md("## Polarisation experiments"),
+#             mo.md("""
+#                 This section allows you to visualize the results of the data from the polarisation experiments. You can select one or more files containing the polarisation data, and the notebook will generate visualizations to help you analyze the results and compare different repetitions and runs.
+#             """),
+#             mo.md("<br>"),
+#             mo.md("### Raw data exploration"),
+#             mo.md("""
+#                 The expandable sections enables you to explore the raw polarisation data of all selected datasets in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
+#             """),
+#             mo.accordion(
+#                 {
+#                     "Data table": polarisation_filtered_df,
+#                     "Data explorer": mo.ui.data_explorer(polarisation_filtered_df),
+#                 },
+#                 lazy=True,
+#                 multiple=True,
+#             ),
+#             mo.md("<br>"),
+#             mo.md("### Current-overvoltage curves"),
+#             mo.md("""
+#                 These plots show the relationship between the current and the overvoltage (i.e., applied voltage - OCV) for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as activation losses, ohmic losses, and mass transport limitations. You can compare the curves across different participants and repetitions to identify trends or differences in the polarisation behavior.
+#             """),
+#             mo.md("<br>"),
+#             polarisation_plots,
+#             polarisation_voltage_current_plots,
+#             mo.md("<br>"),
+#             mo.md("### Polarisation resistance comparison"),
+#             mo.md(f"""
+#                 These plots compare the extracted polarisation resistance values across participants and repititions. The polarisation resistance was calculated from the voltage and current values of the polarisation steps by first collecting the median voltage _versus_ median current of the last {step_evaluation_tail_length} points of each polarisation step. Subsequently, a linear regression was performed over the collected data. The first plot shows the mean polarisation resistance values for each participant with error bars representing the standard deviation across all selected repetitions. The second plot shows the mean polarisation resistance values for each repetition with error bars representing the standard deviation across all selected participants. You can use these plots to identify trends or differences in polarisation resistance values between participants and repetitions.
+#             """),
+#             mo.md("<br>"),
+#             mo.hstack(
+#                 [
+#                     polarisation_resistance_per_participant_plot,
+#                     polarisation_resistance_per_repetition_plot,
+#                 ],
+#                 widths="equal",
+#                 gap=0,
+#             ),
+#             mo.md("<br>"),
+#         ]
+#     )
+#     return
+
+
+# @app.cell
+# def _(data_structure_df, load_file, load_precomputed_df):
+#     # CHARGE-DISCHARGE CYCLING EVALUATION
+#     # STEP 1a: Load ALL charge-discharge files from the full data_structure_df into a single flat DataFrame.
+#     # Filtering by UI selectors is applied later at chart/computation time.
+
+#     if is_wasm():
+#         cd_cycling_flat_df = load_precomputed_df("cd_cycling_flat_df")
+#     else:
+#         # filter out charge-discharge files from the full (unfiltered) structure
+#         _df_cd = data_structure_df.filter(pl.col("technique") == "03 charge-discharge")
+
+#         # load each file (cached per file via @mo.persistent_cache) and concatenate
+#         # into a single flat DataFrame with metadata columns
+#         _frames = []
+#         for _row in _df_cd.iter_rows(named=True):
+#             try:
+#                 _data = load_file(_row["file_path"], ["GCPL"])    
+#             except Exception as e:
+#                 print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
+#                 continue
+#             if _data is not None:
+#                 # rename current and voltage columns
+#                 _data = _data.rename(
+#                     {
+#                         "<I>/mA": "current/mA",
+#                         "I/mA": "current/mA",
+#                         "<Ewe>/V": "voltage/V",
+#                         "Ewe/V": "voltage/V",
+#                     },
+#                     strict=False,
+#                 )
+
+#                 # if no current column is found, try to extract it from the time and capacity columns
+#                 if "current/mA" not in _data.columns and "dq/mA.h" in _data.columns:
+#                     # compute current from capacity and time (I = dQ/dt)
+#                     _data = _data.with_columns(
+#                         (
+#                             pl.col("dq/mA.h").diff().fill_null(0)
+#                             / pl.col("time/s").diff().fill_null(1)
+#                             * 3600
+#                         ).alias("current/mA")
+#                     )
+
+#                 _frames.append(
+#                     _data.with_columns(
+#                         pl.lit(_row["study_phase"]).alias("study_phase"),
+#                         pl.lit(_row["participant"]).alias("participant"),
+#                         pl.lit(_row["repetition"]).alias("repetition"),
+#                         pl.lit(_row["flow_rate"]).alias("flow_rate"),
+#                         # shift study_phase, etc. to the leftmost position for easier access later on
+#                     ).select(
+#                         [
+#                             "study_phase",
+#                             "participant",
+#                             "repetition",
+#                             "flow_rate",
+#                             *[
+#                                 col
+#                                 for col in _data.columns
+#                                 if col
+#                                 not in [
+#                                     "study_phase",
+#                                     "participant",
+#                                     "repetition",
+#                                     "flow_rate",
+#                                 ]
+#                             ],
+#                         ]
+#                     )
+#                 )
+
+#         cd_cycling_flat_df = (
+#             pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
+#         )
+#     return (cd_cycling_flat_df,)
+
+
+# @app.cell
+# def _(
+#     cd_cycling_flat_df,
+#     flow_rate_selector,
+#     participant_selector,
+#     repetition_selector,
+#     study_phase_selector,
+# ):
+#     # CHARGE-DISCHARGE CYCLING EVALUATION
+#     # STEP 1b: Filter the charge-discharge data according to the UI selectors
+
+#     # apply UI filter
+#     cd_cycling_filtered_df = cd_cycling_flat_df.filter(
+#         pl.col("study_phase").is_in([study_phase_selector.value])
+#         & pl.col("participant").is_in(participant_selector.value)
+#         & pl.col("repetition").is_in(repetition_selector.value)
+#         & pl.col("flow_rate").is_in(flow_rate_selector.value)
+#     )
+#     mo.stop(
+#         cd_cycling_filtered_df.is_empty(),
+#     )
+#     return (cd_cycling_filtered_df,)
+
+
+# @app.cell
+# def _(cd_cycling_filtered_df):
+#     # CHARGE-DISCHARGE CYCLING EVALUATION
+#     # STEP 2a: Prepare dataframes for the voltage-capacity as well as voltage-dQ/dV curves from the charge-discharge cycling data
+
+#     # compute derived columns using .over() to keep per-file semantics
+#     _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
+#     # Step 1: compute diff-based columns within each file group
+#     _cd_with_diffs = cd_cycling_filtered_df.with_columns(
+#         pl.col("time/s").diff().over(_meta_cols).alias("dt/s"),
+#         pl.col("Q charge/discharge/mA.h").alias("capacity/mAh"),
+#         (
+#             pl.col("Q charge/discharge/mA.h").diff().over(_meta_cols)
+#             / pl.col("voltage/V").diff().over(_meta_cols)
+#         ).alias("_dQ_dV_raw"),
+#     )
+#     # Step 2: smooth dQ/dV with rolling median within each file group
+#     df_filtered_cd_cycling_data = _cd_with_diffs.with_columns(
+#         pl.col("_dQ_dV_raw").rolling_median(25).over(_meta_cols).alias("dQ/dV"),
+#     ).select(
+#         [
+#             *_meta_cols,
+#             "half cycle",
+#             "time/s",
+#             "voltage/V",
+#             "current/mA",
+#             "capacity/mAh",
+#             "dQ/dV",
+#         ]
+#     )
+
+#     # downsample the data for better performance in the plot
+#     df_filtered_cd_cycling_chart_data = (
+#         df_filtered_cd_cycling_data.sort(
+#             [
+#                 *_meta_cols,
+#                 "half cycle",
+#                 "time/s",
+#             ]
+#         )
+#         .with_columns(
+#             pl.int_range(0, pl.len()).over([*_meta_cols, "half cycle"]).alias("_i")
+#         )
+#         .filter((pl.col("_i") % 10) == 0)
+#         .drop("_i")
+#     )
+
+#     # create a ui slider to chose the half-cycle to display
+#     # (removed stray mo.ui.slider(start=1, stop=10, step=1))
+#     slider_half_cycle = mo.ui.slider(
+#         label="",
+#         start=int(df_filtered_cd_cycling_chart_data["half cycle"].min() / 2),
+#         stop=int(df_filtered_cd_cycling_chart_data["half cycle"].max() / 2),
+#         step=1,
+#         full_width=True,
+#         show_value=True,
+#     )
+#     return (
+#         df_filtered_cd_cycling_chart_data,
+#         df_filtered_cd_cycling_data,
+#         slider_half_cycle,
+#     )
+
+
+# @app.cell
+# def _(
+#     df_filtered_cd_cycling_chart_data,
+#     df_filtered_cd_cycling_data,
+#     slider_half_cycle,
+#     wheel_zoom_x,
+#     wheel_zoom_xy,
+#     wheel_zoom_y,
+# ):
+#     # CHARGE-DISCHARGE CYCLING EVALUATION
+#     # STEP 2b: Build the voltage-time as well as voltage-dQ/dV curves for the charge-discharge cycling data
+
+#     # create selectors and bind them to the legend
+#     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
+#     _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
+
+#     _cd_cycling_capacity_voltage_data = df_filtered_cd_cycling_chart_data.filter(
+#         (pl.col("half cycle") == slider_half_cycle.value)
+#         | (pl.col("half cycle") == slider_half_cycle.value + 1)
+#     ).with_columns(
+#         pl.col("capacity/mAh").abs().alias("capacity/mAh"),
+#     )
+
+#     # compute per-axis data ranges, then build domains with some padding
+#     _all_voltage = _cd_cycling_capacity_voltage_data["voltage/V"]
+#     _voltage_domain = [_all_voltage.min(), _all_voltage.max()]
+#     _dqdv_domain = [0, df_filtered_cd_cycling_data["dQ/dV"].max()]
+
+#     # build a plot of voltage vs. capacity for the selected cycle
+#     cd_cycling_capacity_voltage = (
+#         alt.Chart(
+#             _cd_cycling_capacity_voltage_data
+#         )
+#         .mark_point()
+#         .encode(
+#             x=alt.X("capacity/mAh:Q", title="Capacity / mAh"),
+#             y=alt.Y(
+#                 "voltage/V:Q",
+#                 title="Voltage / V",
+#                 scale=alt.Scale(domain=_voltage_domain),
+#             ),
+#             color=alt.Color("participant:N", title="Participant"),
+#             shape=alt.Shape("repetition:N", title="Repetition"),
+#             opacity=alt.condition(
+#                 _participant_selection & _repetition_selection,
+#                 alt.value(1.0),
+#                 alt.value(0.0),
+#             ),
+#             tooltip=[
+#                 "participant:N",
+#                 "repetition:O",
+#                 "flow_rate:Q",
+#                 alt.Tooltip("capacity/mAh:Q", format=".1f"),
+#                 alt.Tooltip("voltage/V:Q", format=".4f"),
+#             ],
+#         )
+#         .properties(width=720)
+#     )
+
+#     # build a plot of dQ/dV vs. voltage for the selected cycle
+#     cd_cycling_dqdv_charts = (
+#         alt.Chart(
+#             df_filtered_cd_cycling_data.sort(
+#                 [
+#                     "study_phase",
+#                     "participant",
+#                     "repetition",
+#                     "flow_rate",
+#                     "half cycle",
+#                     "time/s",
+#                 ]
+#             ).filter(
+#                 (pl.col("half cycle") == slider_half_cycle.value)
+#                 | (pl.col("half cycle") == slider_half_cycle.value + 1)
+#             )
+#         )
+#         .mark_bar(
+#             orient="horizontal",
+#         )
+#         .encode(
+#             x=alt.X(
+#                 "dQ/dV:Q", title="dQ/dV / mAh/V", scale=alt.Scale(domain=_dqdv_domain)
+#             ),
+#             y=alt.Y(
+#                 "voltage/V:Q",
+#                 title="",
+#                 scale=alt.Scale(domain=_voltage_domain),
+#                 axis=alt.Axis(title=None, labels=False, ticks=False),
+#             ),
+#             color=alt.Color("participant:N", title="Participant"),
+#             opacity=alt.condition(
+#                 _participant_selection & _repetition_selection,
+#                 alt.value(1.0),
+#                 alt.value(0.0),
+#             ),
+#             tooltip=[
+#                 "participant:N",
+#                 "repetition:O",
+#                 "flow_rate:Q",
+#                 alt.Tooltip("dQ/dV:Q", format=".2f"),
+#                 alt.Tooltip("voltage/V:Q", format=".4f"),
+#             ],
+#         )
+#         .properties(
+#             width=170,
+#         )
+#     )
+
+#     cd_cycling_charts = (
+#         alt.hconcat(cd_cycling_capacity_voltage, cd_cycling_dqdv_charts)
+#         .resolve_legend(color="shared")
+#         .properties(
+#             title=alt.TitleParams(
+#                 text="Figure 8. Charge-discharge cycling data",
+#                 subtitle="Voltage-capacity curves and dQ/dV plots for the selected cycle.",
+#                 anchor="start",
+#                 orient="top",
+#                 offset=20,
+#             ),
+#         )
+#         .interactive()
+#         .add_params(_participant_selection, _repetition_selection)
+#         .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
+#     )
+#     return (cd_cycling_charts,)
+
+
+# @app.cell
+# def _(df_filtered_cd_cycling_data, get_linregress_params):
+#     # CHARGE-DISCHARGE CYCLING EVALUATION
+#     # STEP 3a: Aggregate the capacity data for each cycle as charge and discharge capacity and compute the coulombic efficiency
+
+#     # filter out each half-cycle's end capacity
+#     cd_cycling_filtered_cycle_data = (
+#         df_filtered_cd_cycling_data.group_by(
+#             "study_phase",
+#             "participant",
+#             "repetition",
+#             "flow_rate",
+#             "half cycle",
+#         )
+#         .agg(
+#             (pl.col("time/s") / 3600).last().alias("time/h"),
+#             pl.col("capacity/mAh").last().alias("capacity/mAh"),
+#         )
+#         .sort(["study_phase", "participant", "repetition", "flow_rate", "half cycle"])
+#     )
+
+#     # separate capacity values for charge and discharge steps by filtering positive (charge) and negative (discharge) capacity values
+#     cd_cycling_filtered_cycle_data = (
+#         cd_cycling_filtered_cycle_data.with_columns(
+#             pl.when(pl.col("capacity/mAh") > 0)
+#             .then(pl.col("capacity/mAh"))
+#             .otherwise(None)
+#             .alias("charge_capacity/mAh"),
+#             pl.when(pl.col("capacity/mAh") < 0)
+#             .then(pl.col("capacity/mAh").abs())
+#             .otherwise(None)
+#             .alias("discharge_capacity/mAh"),
+#         )
+#         .drop("capacity/mAh")
+#         .group_by(
+#             "study_phase",
+#             "participant",
+#             "repetition",
+#             "flow_rate",
+#             (pl.col("half cycle") // 2).alias("cycle"),
+#         )
+#         .agg(
+#             pl.col("time/h").last().alias("time/h"),
+#             pl.col("charge_capacity/mAh").first().alias("charge_capacity/mAh"),
+#             pl.col("discharge_capacity/mAh").last().alias("discharge_capacity/mAh"),
+#         )
+#         .sort(["study_phase", "participant", "repetition", "flow_rate", "cycle"])
+#     )
+
+#     # calculate coulombic efficiency for each cycle
+#     cd_cycling_filtered_cycle_data = cd_cycling_filtered_cycle_data.with_columns(
+#         (pl.col("discharge_capacity/mAh") / pl.col("charge_capacity/mAh") * 100).alias(
+#             "coulombic_efficiency/%"
+#         ),
+#     ).sort(["study_phase", "participant", "repetition", "flow_rate", "cycle"])
+
+#     # drop all cycles with:
+#     # - undefined coulombic efficiency
+#     # - coulombic efficiency smaller than 60% greater than 140%
+#     cd_cycling_filtered_cycle_data = cd_cycling_filtered_cycle_data.drop_nans(
+#         "coulombic_efficiency/%"
+#     ).filter(
+#         (pl.col("coulombic_efficiency/%") > 60)
+#         & (pl.col("coulombic_efficiency/%") < 140)
+#     )
+
+#     # calculate capacity retention relative to the initial discharge capacity for each group
+#     cd_cycling_filtered_cycle_data = cd_cycling_filtered_cycle_data.with_columns(
+#         (
+#             pl.col("discharge_capacity/mAh")
+#             / pl.col("discharge_capacity/mAh")
+#             .first()
+#             .over(
+#                 "study_phase",
+#                 "participant",
+#                 "repetition",
+#                 "flow_rate",
+#             )
+#             * 100
+#         ).alias("capacity_retention/%")
+#     ).sort(["study_phase", "participant", "repetition", "flow_rate", "cycle"])
+
+#     # get the initial discharge capacity for each group
+#     cd_cycling_initial_discharge_capacity = cd_cycling_filtered_cycle_data.group_by(
+#         "study_phase",
+#         "participant",
+#         "repetition",
+#         "flow_rate",
+#     ).agg(
+#         pl.col("discharge_capacity/mAh").first().alias("capacity/mAh"),
+#     )
+
+#     # compute the capacity fade relative to the initial discharge capacity for each group by performing a group mapping of get_linregress_params over the capacity-time data and extracting the slope of the linear regression as capacity fade rate
+#     cd_cycling_filtered_capacity_fade_time = (
+#         cd_cycling_filtered_cycle_data.group_by(
+#             "study_phase",
+#             "participant",
+#             "repetition",
+#             "flow_rate",
+#         )
+#         .map_groups(
+#             lambda df: get_linregress_params(
+#                 df=df,
+#                 x_name="time/h",
+#                 y_name="capacity_retention/%",
+#                 with_columns=[
+#                     "study_phase",
+#                     "participant",
+#                     "repetition",
+#                     "flow_rate",
+#                     "time/h",
+#                     "cycle",
+#                     "capacity_retention/%",
+#                 ],
+#             )
+#         )
+#         .sort(
+#             ["study_phase", "participant", "repetition", "flow_rate", "time/h", "cycle"]
+#         )
+#         .with_columns(
+#             (pl.col("slope") * 24).alias("capacity_fade_rate/%/d"),
+#         )
+#         .select(
+#             [
+#                 "study_phase",
+#                 "participant",
+#                 "repetition",
+#                 "flow_rate",
+#                 "capacity_fade_rate/%/d",
+#             ]
+#         )
+#         .sort(["study_phase", "participant", "repetition", "flow_rate"])
+#     )
+
+#     # compute the capacity fade relative to the initial discharge capacity for each group by performing a group mapping of get_linregress_params over the capacity-cycle data and extracting the slope of the linear regression as capacity fade rate
+#     cd_cycling_filtered_capacity_fade_cycle = (
+#         cd_cycling_filtered_cycle_data.group_by(
+#             "study_phase",
+#             "participant",
+#             "repetition",
+#             "flow_rate",
+#         )
+#         .map_groups(
+#             lambda df: get_linregress_params(
+#                 df=df,
+#                 x_name="cycle",
+#                 y_name="capacity_retention/%",
+#                 with_columns=[
+#                     "study_phase",
+#                     "participant",
+#                     "repetition",
+#                     "flow_rate",
+#                     "time/h",
+#                     "cycle",
+#                     "capacity_retention/%",
+#                 ],
+#             )
+#         )
+#         .sort(
+#             ["study_phase", "participant", "repetition", "flow_rate", "time/h", "cycle"]
+#         )
+#         .with_columns(
+#             (pl.col("slope")).alias("capacity_fade_rate/cycle"),
+#         )
+#         .select(
+#             [
+#                 "study_phase",
+#                 "participant",
+#                 "repetition",
+#                 "flow_rate",
+#                 "capacity_fade_rate/cycle",
+#             ]
+#         )
+#         .sort(["study_phase", "participant", "repetition", "flow_rate"])
+#     )
+#     return (
+#         cd_cycling_filtered_capacity_fade_cycle,
+#         cd_cycling_filtered_capacity_fade_time,
+#         cd_cycling_filtered_cycle_data,
+#         cd_cycling_initial_discharge_capacity,
+#     )
+
+
+# @app.cell
+# def _(
+#     cd_cycling_filtered_capacity_fade_cycle,
+#     cd_cycling_filtered_cycle_data,
+#     wheel_zoom_x,
+#     wheel_zoom_xy,
+#     wheel_zoom_y,
+# ):
+#     # CHARGE-DISCHARGE CYCLING EVALUATION
+#     # STEP 3b: Build the capacity-cycle curves for the charge-discharge cycling data
+
+#     # create selectors and bind them to the legend
+#     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
+#     _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
+
+#     # build domains for the capacity retention values and time values
+#     _all_capacity_retention = cd_cycling_filtered_cycle_data["capacity_retention/%"]
+#     _capacity_retention_domain = [
+#         _all_capacity_retention.min() / 1.02,
+#         _all_capacity_retention.max() * 1.02,
+#     ]
+
+#     _capacity_cycle_chart = (
+#         alt.Chart(cd_cycling_filtered_cycle_data)
+#         .mark_point()
+#         .encode(
+#             x=alt.X("cycle:Q", title="Cycle"),
+#             y=alt.Y(
+#                 "capacity_retention/%",
+#                 title="(Discharge) Capacity Retention / %",
+#                 scale=alt.Scale(domain=_capacity_retention_domain),
+#             ),
+#             color=alt.Color("participant:N", title="Participant"),
+#             shape=alt.Shape("repetition:N", title="Repetition"),
+#             opacity=alt.condition(
+#                 _participant_selection & _repetition_selection,
+#                 alt.value(1.0),
+#                 alt.value(0.0),
+#             ),
+#             tooltip=[
+#                 "participant:N",
+#                 "repetition:O",
+#                 "flow_rate:Q",
+#                 alt.Tooltip("cycle:Q", format=".0f"),
+#                 alt.Tooltip("charge_capacity/mAh:Q", format=".1f"),
+#                 alt.Tooltip("discharge_capacity/mAh:Q", format=".1f"),
+#             ],
+#         )
+#         .properties(
+#             width=720,
+#             height=300,
+#         )
+#     )
+
+#     # CHARGE-DISCHARGE CYCLING EVALUATION
+#     # STEP 3c: Build bar chart for cycle-based capacity fade rates per participant and repetition
+#     _capacity_fade_cycle_chart = (
+#         alt.Chart(cd_cycling_filtered_capacity_fade_cycle)
+#         .mark_bar()
+#         .encode(
+#             x=alt.X(
+#                 "capacity_fade_rate/cycle:Q", title="Capacity fade rate / % cycle⁻¹"
+#             ),
+#             y=alt.Y(
+#                 "participant:N", axis=alt.Axis(title=None, labels=False, ticks=False)
+#             ),
+#             yOffset=alt.YOffset("repetition:O", title="Repetition"),
+#             color=alt.Color("participant:N", title="Participant"),
+#             opacity=alt.Opacity("repetition:O", title="Repetition", scale=alt.Scale(range=[1, 0.33])),
+#             tooltip=[
+#                 "study_phase:O",
+#                 "participant:N",
+#                 "repetition:O",
+#                 "flow_rate:Q",
+#                 alt.Tooltip("capacity_fade_rate/cycle:Q", format=".4f"),
+#             ],
+#         )
+#         .properties(
+#             width=170,
+#             height=300,
+#         )
+#     )
+
+#     # build the final chart by concatenating the capacity-time and capacity fade rate charts and resolving the legends
+#     cd_cycling_capacity_cycle_chart = (
+#         alt.hconcat(_capacity_cycle_chart, _capacity_fade_cycle_chart)
+#         .resolve_legend(color="shared")
+#         .properties(
+#             title=alt.TitleParams(
+#                 text="Figure 9. Capacity retention over cycle (left) and corresponding capacity fade rate (right).",
+#                 subtitle=[
+#                     "Data is shown for the selected participants and repetitions. Capacity fade rate was calculated as the slope of a linear regression over the (discharge) capacity retention vs. cycle data of",
+#                     "each repetition individually.",
+#                 ],
+#                 anchor="start",
+#                 orient="top",
+#                 offset=20,
+#             ),
+#         )
+#         .interactive()
+#         .add_params(_participant_selection, _repetition_selection)
+#         .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
+#     )
+#     return (cd_cycling_capacity_cycle_chart,)
+
+
+# @app.cell
+# def _(
+#     cd_cycling_filtered_capacity_fade_time,
+#     cd_cycling_filtered_cycle_data,
+#     wheel_zoom_x,
+#     wheel_zoom_xy,
+#     wheel_zoom_y,
+# ):
+#     # CHARGE-DISCHARGE CYCLING EVALUATION
+#     # STEP 3b: Build the capacity-time curves for the charge-discharge cycling data
+
+#     # create selectors and bind them to the legend
+#     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
+#     _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
+
+#     # build domains for the capacity retention values and time values
+#     _all_capacity_retention = cd_cycling_filtered_cycle_data["capacity_retention/%"]
+#     _capacity_retention_domain = [
+#         _all_capacity_retention.min() / 1.02,
+#         _all_capacity_retention.max() * 1.02,
+#     ]
+
+#     # build a chart of capacity vs. time for the selected cycle
+#     _capacity_time_chart = (
+#         alt.Chart(cd_cycling_filtered_cycle_data)
+#         .mark_point()
+#         .encode(
+#             x=alt.X("time/h:Q", title="Time / h"),
+#             y=alt.Y(
+#                 "capacity_retention/%:Q",
+#                 title="(Discharge) Capacity Retention / %",
+#                 scale=alt.Scale(domain=_capacity_retention_domain),
+#             ),
+#             color=alt.Color("participant:N", title="Participant"),
+#             shape=alt.Shape("repetition:N", title="Repetition"),
+#             opacity=alt.condition(
+#                 _participant_selection & _repetition_selection,
+#                 alt.value(1.0),
+#                 alt.value(0.0),
+#             ),
+#             tooltip=[
+#                 "participant:N",
+#                 "repetition:O",
+#                 "flow_rate:Q",
+#                 "cycle:O",
+#                 alt.Tooltip("time/h:Q", format=".0f"),
+#                 alt.Tooltip("discharge_capacity/mAh:Q", format=".1f"),
+#             ],
+#         )
+#         .properties(
+#             width=720,
+#             height=300,
+#         )
+#     )
+
+#     # build a chart of capacity fade rate vs. time for the selected cycle
+#     _capacity_fade_time_chart = (
+#         alt.Chart(cd_cycling_filtered_capacity_fade_time)
+#         .mark_bar()
+#         .encode(
+#             x=alt.X("capacity_fade_rate/%/d:Q", title="Capacity fade rate / % d⁻¹"),
+#             y=alt.Y(
+#                 "participant:N", axis=alt.Axis(title=None, labels=False, ticks=False)
+#             ),
+#             yOffset=alt.YOffset("repetition:O", title="Repetition"),
+#             color=alt.Color("participant:N", title="Participant"),
+#             opacity=alt.Opacity("repetition:O", title="Repetition",scale=alt.Scale(range=[1, 0.33])),
+#             tooltip=[
+#                 "study_phase:N",
+#                 "participant:N",
+#                 "repetition:O",
+#                 "flow_rate:Q",
+#                 alt.Tooltip("capacity_fade_rate/%/d:Q", format=".4f"),
+#             ],
+#         )
+#         .properties(
+#             width=170,
+#             height=300,
+#         )
+#     )
+
+#     # build the final chart by concatenating the capacity-time and capacity fade rate charts and resolving the legends
+#     cd_cycling_capacity_time_chart = (
+#         alt.hconcat(_capacity_time_chart, _capacity_fade_time_chart)
+#         .resolve_legend(color="shared")
+#         .properties(
+#             title=alt.TitleParams(
+#                 text="Figure 10. Capacity retention over time (left) and corresponding capacity fade rate (right).",
+#                 subtitle=[
+#                     "Data is shown for the selected participants and repetitions. Capacity fade rate was calculated as the slope of a linear regression over the (discharge) capacity retention vs. time data of ",
+#                     "each repetition individually.",
+#                 ],
+#                 anchor="start",
+#                 orient="top",
+#                 offset=20,
+#             )
+#         )
+#         .interactive()
+#         .add_params(_participant_selection, _repetition_selection)
+#         .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
+#     )
+#     return (cd_cycling_capacity_time_chart,)
+
+
+# @app.cell
+# def _(cd_cycling_filtered_cycle_data):
+#     # CHARGE-DISCHARGE CYCLING EVALUATION
+#     # STEP 3b: Build boxplots from capacity data per participant to compare the capacity distributions between participants
+
+#     # build domains for the capacity values
+#     _all_capacity = cd_cycling_filtered_cycle_data["discharge_capacity/mAh"].abs()
+#     _capacity_domain = [_all_capacity.min(), _all_capacity.max()]
+
+#     # construct a box plot
+#     cd_cycling_capacity_participant = (
+#         (
+#             alt.Chart(
+#                 cd_cycling_filtered_cycle_data,
+#             )
+#             .mark_boxplot(
+#                 size=50,
+#                 ticks={"size": 30},
+#                 median={"color": "black", "thickness": 2},
+#                 outliers={"size": 10, "shape": "circle"},
+#             )
+#             .encode(
+#                 x=alt.X("participant:N", title="Participant"),
+#                 y=alt.Y(
+#                     "discharge_capacity/mAh:Q",
+#                     title="(Discharge) Capacity / mAh",
+#                     scale=alt.Scale(domain=_capacity_domain),
+#                 ),
+#                 color=alt.Color("participant:N", title="Participant"),
+#                 # opacity=alt.condition(_legend_sel, alt.value(1.0), alt.value(0.05)),
+#             )
+#         )
+#         .properties(
+#             title=alt.TitleParams(
+#                 text="Figure 11. Capacity distribution per participant",
+#                 subtitle=[
+#                     "Boxplots showing the distribution of discharge capacity values for each participant",
+#                     "across all cycles and all repetitions.",
+#                 ],
+#                 anchor="start",
+#                 orient="top",
+#                 offset=20,
+#             ),
+#             width=325,
+#         )
+#         .configure_axisX(labelAngle=-45)
+#     )
+#     return (cd_cycling_capacity_participant,)
+
+
+# @app.cell
+# def _(cd_cycling_filtered_cycle_data):
+#     # CHARGE-DISCHARGE CYCLING EVALUATION
+#     # STEP 3b: Build boxplots from capacity data per repetition to compare the capacity distributions between repetitions
+
+#     # build domains for the capacity values
+#     _all_capacity = cd_cycling_filtered_cycle_data["discharge_capacity/mAh"].abs()
+#     _capacity_domain = [_all_capacity.min(), _all_capacity.max()]
+
+#     # construct a box plot
+#     cd_cycling_capacity_repetition = (
+#         (
+#             alt.Chart(
+#                 cd_cycling_filtered_cycle_data,
+#             )
+#             .mark_boxplot(
+#                 size=50,
+#                 ticks={"size": 30},
+#                 median={"color": "black", "thickness": 2},
+#                 outliers={"size": 10, "shape": "circle"},
+#             )
+#             .encode(
+#                 x=alt.X("repetition:O", title="Repetition"),
+#                 y=alt.Y(
+#                     "discharge_capacity/mAh:Q",
+#                     title="(Discharge) Capacity / mAh",
+#                     scale=alt.Scale(domain=_capacity_domain),
+#                 ),
+#                 color=alt.Color("repetition:O", title="Repetition"),
+#                 # opacity=alt.condition(_legend_sel, alt.value(1.0), alt.value(0.05)),
+#             )
+#         )
+#         .properties(
+#             title=alt.TitleParams(
+#                 text="Figure 12. Capacity distribution per repetition",
+#                 subtitle=[
+#                     "Boxplots showing the distribution of discharge capacity values for each repetition",
+#                     "across all cycles and all participants.",
+#                 ],
+#                 anchor="start",
+#                 orient="top",
+#                 offset=20,
+#             ),
+#             width=325,
+#         )
+#         .configure_axisX(labelAngle=0)
+#     )
+#     return (cd_cycling_capacity_repetition,)
+
+
+# @app.cell
+# def section_charge_discharge_cycling(
+#     cd_cycling_capacity_cycle_chart,
+#     cd_cycling_capacity_participant,
+#     cd_cycling_capacity_repetition,
+#     cd_cycling_capacity_time_chart,
+#     cd_cycling_charts,
+#     cd_cycling_filtered_df,
+#     cd_cycling_initial_discharge_capacity,
+#     slider_half_cycle,
+#     theoretical_capacity_mAh,
+# ):
+#     mo.vstack(
+#         [
+#             mo.md("## Charge-Discharge Cycling"),
+#             mo.md("""
+#                 This section allows you to visualize the results of the charge-discharge cycling experiments. You can select one or more files containing the charge-discharge data, and the notebook will generate visualizations to help you analyze the results and compare different repetitions and runs.
+#             """),
+#             mo.md("<br>"),
+#             mo.md("### Raw data exploration"),
+#             mo.md("""
+#                 The expandable sections enables you to explore the raw charge-discharge cycling data of all selected datasets in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
+#             """),
+#             mo.accordion(
+#                 {
+#                     "Data table": cd_cycling_filtered_df,
+#                     "Data explorer": mo.ui.data_explorer(cd_cycling_filtered_df),
+#                 },
+#                 lazy=True,
+#                 multiple=True,
+#             ),
+#             mo.md("<br>"),
+#             mo.md("### Voltage-capacity data"),
+#             mo.md("""
+#                 These plots show the relationship between the voltage and the capacity for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as the presence of different plateaus corresponding to different electrochemical reactions, changes in internal resistance, and capacity fade over cycles. You can compare the curves across different participants and repetitions to identify trends or differences in the charge-discharge behavior. Use the slider to select the cycle to display.
+#             """),
+#             mo.vstack(
+#                 [
+#                     mo.md("**Select cycle:**"),
+#                     slider_half_cycle,
+#                     cd_cycling_charts,
+#                 ]
+#             ),
+#             mo.md("<br>"),
+#             mo.md("### Capacity distribution per participant and repetition"),
+#             mo.md(f"""
+#                 These plots show the distribution of capacity values across all cycles for each participant and repetition, respectively. The boxplots display the median, interquartile range, and outliers of the capacity values, allowing you to compare the capacity distributions between participants and repetitions and identify trends or differences in the capacity performance. The average **initial (discharge) capacity** over the selected dataset ({len(cd_cycling_initial_discharge_capacity)} experiments) is **{cd_cycling_initial_discharge_capacity["capacity/mAh"].mean():.1f} mAh ± {(cd_cycling_initial_discharge_capacity["capacity/mAh"].std() if len(cd_cycling_initial_discharge_capacity) > 1 else 0):.1f} mAh** (uncertainty: standard deviation), which represents an average **capacity utilization of {(cd_cycling_initial_discharge_capacity["capacity/mAh"].mean() / theoretical_capacity_mAh):.1%}** with respect to the theoretical capacity as per the protocol defined electrolyte composition (0.2 M redox-active species).
+#             """),
+#             mo.md("<br>"),
+#             mo.hstack(
+#                 [
+#                     cd_cycling_capacity_participant,
+#                     cd_cycling_capacity_repetition,
+#                 ]
+#             ),
+#             mo.md("<br>"),
+#             mo.md("### Capacity fade"),
+#             mo.md("""
+#                 These plots show the capacity retention over cycles and time for each selected file. The first plot shows the capacity at the end of each half cycle (i.e., after each charge and discharge step, respectively) over the cycle number, while the second plot shows the capacity over time. You can use these plots to analyze the capacity fade behavior of the system and identify trends or differences between participants and repetitions.
+#             """),
+#             mo.md("<br>"),
+#             cd_cycling_capacity_cycle_chart,
+#             mo.md("<br>"),
+#             cd_cycling_capacity_time_chart,
+#             mo.md("<br>"),
+#         ]
+#     )
+#     return
 
 
 @app.cell
