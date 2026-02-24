@@ -133,6 +133,8 @@ def _():
         _source = mo.notebook_location() / _relative
 
         if is_wasm():
+            import pyarrow.parquet as pq
+
             _source_str = str(_source)
             # PurePosixPath collapses https:// to https:/ — restore double slash
             for _scheme in ("https:/", "http:/"):
@@ -142,7 +144,10 @@ def _():
                     _source_str = _scheme + "/" + _source_str[len(_scheme) :]
                     break
             _local_path = _ensure_local(_source_str)
-            return pl.read_parquet(_local_path)
+            # polars' native parquet reader is not available in Pyodide/WASM,
+            # so we use pyarrow to read and convert to polars
+            _arrow_table = pq.read_table(str(_local_path))
+            return pl.from_arrow(_arrow_table)
 
         return pl.read_parquet(_source)
 

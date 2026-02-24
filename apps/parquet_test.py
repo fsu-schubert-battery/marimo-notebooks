@@ -63,22 +63,29 @@ def _():
             return Path(_fd.name)
         return Path(file_path)
 
+    def _fix_wasm_url(source) -> str:
+        """PurePosixPath collapses https:// to https:/ — restore double slash."""
+        _s = str(source)
+        for _scheme in ("https:/", "http:/"):
+            if _s.startswith(_scheme) and not _s.startswith(_scheme + "/"):
+                return _scheme + "/" + _s[len(_scheme):]
+        return _s
+
     def load_precomputed_df(name: str) -> pl.DataFrame:
         _relative = f"public/data/{name}.parquet"
         _source = mo.notebook_location() / _relative
 
         if is_wasm():
-            _source_str = str(_source)
-            # PurePosixPath collapses https:// to https:/ — restore double slash
-            for _scheme in ("https:/", "http:/"):
-                if _source_str.startswith(_scheme) and not _source_str.startswith(
-                    _scheme + "/"
-                ):
-                    _source_str = _scheme + "/" + _source_str[len(_scheme):]
-                    break
+            import pyarrow.parquet as pq
+            import io
+
+            _source_str = _fix_wasm_url(_source)
             mo.output.append(mo.md(f"**Loading:** `{_source_str}`"))
             _local_path = _ensure_local(_source_str)
-            return pl.read_parquet(_local_path)
+            # polars' native parquet reader is not available in Pyodide/WASM,
+            # so we use pyarrow to read and convert to polars
+            _arrow_table = pq.read_table(str(_local_path))
+            return pl.from_arrow(_arrow_table)
 
         mo.output.append(mo.md(f"**Loading:** `{_source}`"))
         return pl.read_parquet(_source)
