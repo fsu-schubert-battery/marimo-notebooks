@@ -116,20 +116,22 @@ def _():
     @mo.persistent_cache
     def load_precomputed_df(name: str) -> pl.DataFrame:
         _relative = f"public/data/{name}.parquet"
-        if is_wasm():
-            from urllib.parse import urljoin
+        # Use mo.notebook_location() in all modes to resolve relative to notebook dir
+        _source = mo.notebook_location() / _relative
 
-            _location = str(mo.notebook_location())
-            if _location.startswith(("http://", "https://")):
-                _base_url = _location.rsplit("/", 1)[0] + "/"
-                _source = urljoin(_base_url, _relative)
-            else:
-                _source = _relative
-            _local_path = _ensure_local(_source)
+        if is_wasm():
+            _source_str = str(_source)
+            # PurePosixPath collapses https:// to https:/ — restore double slash
+            for _scheme in ("https:/", "http:/"):
+                if _source_str.startswith(_scheme) and not _source_str.startswith(
+                    _scheme + "/"
+                ):
+                    _source_str = _scheme + "/" + _source_str[len(_scheme) :]
+                    break
+            _local_path = _ensure_local(_source_str)
             return pl.read_parquet(_local_path)
 
-        _local_source = mo.notebook_location() / _relative
-        return pl.read_parquet(_local_source)
+        return pl.read_parquet(_source)
 
     # Load a dataframe from a file, cached to disk per (file_path, technique_filter) pair.
     # Data files are write-once (never change after creation), so content-based
