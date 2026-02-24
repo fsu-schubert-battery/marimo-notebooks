@@ -534,7 +534,9 @@ def _(load_precomputed_df):
     # │   │   ├── [...]
     # ├── phase_2/
     # │   ├── [...]
-    data_dir = Path(str(mo.notebook_location() / "public" / "data"))
+    data_dir = Path(str(mo.notebook_location() / "data"))
+    if not data_dir.exists():
+        data_dir = Path(str(mo.notebook_location() / "public" / "data"))
 
     if is_wasm():
         data_structure_df = load_precomputed_df("data_structure_df").with_columns(
@@ -801,6 +803,20 @@ def _(temperature_data_df):
     # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
     # STEP 2a: Build an area chart to visualize the temperature data over time
 
+    if temperature_data_df.is_empty():
+        temperature_time_chart = (
+            alt.Chart(pl.DataFrame({"message": ["No temperature data available for the selected study phase."]}))
+            .mark_text(align="left", baseline="top")
+            .encode(
+                text="message:N",
+            )
+            .properties(
+                width=975,
+                height=150,
+            )
+        )
+        return (temperature_time_chart,)
+
     # domain for the temperature values
     _all_temperature = temperature_data_df["temperature/°C"]
     _temperature_domain = [_all_temperature.min() - 0.1, _all_temperature.max() + 0.1]
@@ -983,9 +999,15 @@ def _(combined_temperature_chart, temperature_data_df):
             ),
             mo.md("<br>"),
             mo.md("### Participant schedules and temperature over time"),
-            mo.md(f"""
+            mo.md(
+                f"""
                 The plot shows the participant schedules and the temperature data over time. You can use this plot to analyze the temperature behavior during the experiments and identify trends or differences between different time periods. The **average temperature** over the recorded time period was **{temperature_data_df["temperature/°C"].mean():.1f} °C ± {(temperature_data_df["temperature/°C"].std() if len(temperature_data_df) > 1 else 0):.1f} °C** (uncertainty: standard deviation) with a **minimum temperature of {temperature_data_df["temperature/°C"].min()} °C** and **maximum temperature of {temperature_data_df["temperature/°C"].max()} °C**.
-            """),
+                """
+            )
+            if not temperature_data_df.is_empty()
+            else mo.md(
+                "No temperature data is currently available for the selected study phase."
+            ),
             mo.md("<br>"),
             combined_temperature_chart,
         ]

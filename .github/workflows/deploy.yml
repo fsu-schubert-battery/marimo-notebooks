@@ -13,7 +13,7 @@ on:
       - 'apps/**/*.py'
       - 'notebooks/**/*.py'
       - 'templates/**'
-        - 'apps/public/data/*.parquet'
+      - 'apps/public/data/*.parquet'
   workflow_dispatch:    # Allow manual triggering from the GitHub UI
 
 # Concurrency settings to manage multiple workflow runs

@@ -21,8 +21,10 @@ from yadg.subcommands import extract as yadg_extract
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = ROOT / "apps" / "public" / "data"
-OUT_DIR = DATA_DIR
+DATA_DIR = ROOT / "data"
+if not DATA_DIR.exists():
+    DATA_DIR = ROOT / "apps" / "public" / "data"
+OUT_DIR = ROOT / "apps" / "public" / "data"
 
 
 def mpr_extract_metadata(path: Path, file_type: Optional[str] = None) -> tuple[dict, dict]:
@@ -313,6 +315,12 @@ def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     data_structure_df = build_data_structure_df(DATA_DIR)
+    if data_structure_df.height == 0:
+        raise RuntimeError(
+            "No input files found for precompute. Expected raw data under "
+            f"{DATA_DIR} (or fallback apps/public/data) with .mpr/.csv files."
+        )
+
     eis_flat_df = build_eis_flat_df(data_structure_df)
     polarisation_flat_df = build_polarisation_flat_df(data_structure_df)
     cd_cycling_flat_df = build_cd_cycling_flat_df(data_structure_df)
