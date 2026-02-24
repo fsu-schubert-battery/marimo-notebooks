@@ -4,11 +4,10 @@
 # description = "Notebook for visualizing the IFBS data"
 # requires-python = ">=3.12"
 # dependencies = [
-#     "marimo[recommended]>=0.19.11",
+#     "marimo[recommended]>=0.20.1",
 #     "galvani>=0.4.1",
 #     "yadg>=6.2.0",
-#     "polars>=0.19.0",
-#     "PyGithub>=2.0"
+#     "polars>=0.19.0"
 # ]
 #
 # [tool.marimo.runtime]
@@ -17,7 +16,7 @@
 
 import marimo
 
-__generated_with = "0.19.11"
+__generated_with = "0.20.2"
 app = marimo.App(
     width="medium",
     app_title="International Flow Battery Study – Data Dashboard",
@@ -47,7 +46,7 @@ with app.setup:
 
     alt.data_transformers.enable("vegafusion")
 
-    # detect WASM runtime (deployed Marimo notebook on GitHub Pages)
+    # detect WASM runtime (deployed marimo notebook in browser/pyodide)
     def is_wasm() -> bool:
         return "pyodide" in sys.modules
 
@@ -63,18 +62,18 @@ def _():
     ######################################
 
     # extract metadata only
-    def mpr_extract_metadata(path: str | Path, filetype: Optional[str] = None) -> dict:
+    def mpr_extract_metadata(path: str | Path, file_type: Optional[str] = None) -> dict:
 
-        # check the filetype based on the suffix if not provided
-        if filetype is None:
+        # check the file_type based on the suffix if not provided
+        if file_type is None:
             suf = path.suffix.lower()
             if suf == ".mpr":
-                filetype = "eclab.mpr"
+                file_type = "eclab.mpr"
             elif suf == ".mpt":
-                filetype = "eclab.mpt"
+                file_type = "eclab.mpt"
             else:
                 raise ValueError(
-                    f"Unsupported suffix {path.suffix!r}. Provide filetype explicitly."
+                    f"Unsupported suffix {path.suffix!r}. Provide file_type explicitly."
                 )
 
         # extract metadata using yadg_extract() in a temporary directory
@@ -82,7 +81,7 @@ def _():
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "meta.json"
             yadg_extract(
-                filetype=filetype, infile=path, outfile=str(out), meta_only=True
+                filetype=file_type, infile=path, outfile=str(out), meta_only=True
             )
             meta_data = (
                 json.loads(out.read_text(encoding="utf-8"))
@@ -96,31 +95,41 @@ def _():
 
     # get the technique from the metadata
     def mpr_get_technique(
-        path: str | Path, filetype: Optional[str] = None
+        path: str | Path, file_type: Optional[str] = None
     ) -> Optional[str]:
-        _, settings = mpr_extract_metadata(path, filetype)
+        _, settings = mpr_extract_metadata(path, file_type)
         return settings.get("technique", None)
 
-    # If file_path is a URL (WASM / GitHub Pages), download it to a local
-    # temporary file so that all downstream I/O (galvani, yadg, polars) works
-    # unchanged.  The temp file is kept for the lifetime of the session;
-    # @mo.persistent_cache ensures each URL is only fetched once.
-    #
-    # In Pyodide (WASM) urllib.request is monkey-patched to use the browser
-    # Fetch API under the hood, so this works in both environments.
-    # raw.githubusercontent.com serves Access-Control-Allow-Origin: * so
-    # CORS is not an issue.
-    def _ensure_local(file_path):
+    def _ensure_local(file_path: str | Path) -> Path:
         _path_str = str(file_path)
         if _path_str.startswith(("http://", "https://")):
             import urllib.request
+
             _suffix = Path(_path_str.split("?")[0].split("/")[-1]).suffix
             _fd = tempfile.NamedTemporaryFile(suffix=_suffix, delete=False)
-            with urllib.request.urlopen(_path_str) as _resp:
-                _fd.write(_resp.read())
+            with urllib.request.urlopen(_path_str) as _response:
+                _fd.write(_response.read())
             _fd.close()
             return Path(_fd.name)
-        return file_path
+        return Path(file_path)
+
+    @mo.persistent_cache
+    def load_precomputed_df(name: str) -> pl.DataFrame:
+        _relative = f"public/data/{name}.parquet"
+        if is_wasm():
+            from urllib.parse import urljoin
+
+            _location = str(mo.notebook_location())
+            if _location.startswith(("http://", "https://")):
+                _base_url = _location.rsplit("/", 1)[0] + "/"
+                _source = urljoin(_base_url, _relative)
+            else:
+                _source = _relative
+            _local_path = _ensure_local(_source)
+            return pl.read_parquet(_local_path)
+
+        _local_source = mo.notebook_location() / _relative
+        return pl.read_parquet(_local_source)
 
     # Load a dataframe from a file, cached to disk per (file_path, technique_filter) pair.
     # Data files are write-once (never change after creation), so content-based
@@ -162,7 +171,7 @@ def _():
             elif file_path.suffix == ".csv":
                 df = pl.read_csv(f)
             else:
-                raise ValueError(f"Unsupported file type: {file_path.suffix}")
+                raise ValueError(f"Unsupported file technique: {file_path.suffix}")
         return df
 
 
@@ -190,11 +199,11 @@ def _():
         return df
 
 
-    return load_file, recalculate_time
+    return load_file, load_precomputed_df, recalculate_time
 
 
 @app.cell(hide_code=True)
-def _():
+def _(techniqueError):
     # COMPUTATION HELPERS
 
     def get_x_intercepts(
@@ -221,7 +230,7 @@ def _():
         """
 
         if isinstance(df, pl.Series):
-            raise TypeError(
+            raise techniqueError(
                 "get_x_intercepts expected a Polars DataFrame/LazyFrame, got a Series. "
                 "Pass the full table (with group/x/y columns), not df['col']."
             )
@@ -497,7 +506,7 @@ def _():
 
 
 @app.cell
-def _():
+def _(load_precomputed_df):
     # main data directory
     # Note: The expected folder structure is the following:
     #
@@ -506,17 +515,17 @@ def _():
     # │   ├── participant_1/
     # │   │   ├── 1/
     # │   │   │   ├── flow_rate_1/
-    # │   │   │   │   ├── test_type_1/
+    # │   │   │   │   ├── test_technique_1/
     # │   │   │   │   │   ├── file_1
     # │   │   │   │   │   ├── file_2
-    # │   │   │   │   ├── test_type_2/
+    # │   │   │   │   ├── test_technique_2/
     # │   │   │   │   │   ├── file_1
     # │   │   │   │   │   ├── file_2
     # │   │   │   ├── flow_rate_2/
-    # │   │   │   │   ├── test_type_1/
+    # │   │   │   │   ├── test_technique_1/
     # │   │   │   │   │   ├── file_1
     # │   │   │   │   │   ├── file_2
-    # │   │   │   │   ├── test_type_2/
+    # │   │   │   │   ├── test_technique_2/
     # │   │   │   │   │   ├── file_1
     # │   │   │   │   │   ├── file_2
     # │   │   ├── 2/
@@ -525,80 +534,20 @@ def _():
     # │   │   ├── [...]
     # ├── phase_2/
     # │   ├── [...]
+    data_dir = Path(str(mo.notebook_location() / "public" / "data"))
 
     if is_wasm():
-        # ── WASM / GitHub Pages ──────────────────────────────────────────────
-        # Cannot iterate server directories; discover files via the GitHub
-        # Tree API (single API call for the entire recursive listing).
-        from github import Github
-        from urllib.parse import quote
-
-        GITHUB_REPO = "fsu-schubert-battery/marimo-notebooks"
-        GITHUB_BRANCH = "main"
-        GITHUB_DATA_PATH = "notebooks/public/data"
-        ALLOWED_SUFFIXES = {".mpr"}
-
-        _g = Github()  # unauthenticated – public repo (60 requests / h)
-        _repo = _g.get_repo(GITHUB_REPO)
-        _branch = _repo.get_branch(GITHUB_BRANCH)
-        _tree = _repo.get_git_tree(_branch.commit.sha, recursive=True)
-
-        _entries = []
-        for _elem in _tree.tree:
-            if _elem.type != "blob":
-                continue
-            if not _elem.path.startswith(GITHUB_DATA_PATH + "/"):
-                continue
-
-            _rel_path = _elem.path[len(GITHUB_DATA_PATH) + 1 :]
-            _parts = _rel_path.split("/")
-
-            # Expected depth: study_phase / participant / repetition / flow_rate / type / filename
-            if len(_parts) != 6:
-                continue
-
-            _filename = _parts[-1]
-            _suffix = Path(_filename).suffix
-            if _suffix not in ALLOWED_SUFFIXES or _filename.startswith("."):
-                continue
-            if "fail" in _parts[2]:
-                continue
-
-            _download_url = (
-                f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}/"
-                + quote(_elem.path, safe="/")
-            )
-            _entries.append(
-                {
-                    "study_phase": _parts[0],
-                    "participant": _parts[1],
-                    "repetition": _parts[2],
-                    "flow_rate": _parts[3],
-                    "type": _parts[4],
-                    "file_path": _download_url,
-                }
-            )
-
-        _g.close()
-
-        data_structure_df = pl.DataFrame(
-            _entries,
-            schema={
-                "study_phase": pl.String,
-                "participant": pl.String,
-                "repetition": pl.Int16,
-                "flow_rate": pl.Float64,
-                "type": pl.String,
-                "file_path": pl.Object,
-            },
+        data_structure_df = load_precomputed_df("data_structure_df").with_columns(
+            pl.col("study_phase").cast(pl.String),
+            pl.col("participant").cast(pl.String),
+            pl.col("repetition").cast(pl.Int16),
+            pl.col("flow_rate").cast(pl.Float64),
+            pl.col("technique").cast(pl.String),
+            pl.col("file_path").cast(pl.String),
         )
-
     else:
-        # ── Local filesystem ─────────────────────────────────────────────────
-        data_dir = Path(str(mo.notebook_location() / "public" / "data"))
-
         # based on the folder structure create a dataframe with the following columns:
-        # phase, participant, repetition, flow_rate, type, file_name, file_path
+        # phase, participant, repetition, flow_rate, technique, file_name, file_path
         data_structure_df = pl.DataFrame(
             [
                 {
@@ -606,7 +555,7 @@ def _():
                     "participant": p.name,
                     "repetition": r.name,
                     "flow_rate": f.name,
-                    "type": t.name,
+                    "technique": t.name,
                     "file_path": file,
                 }
                 for study_phase in data_dir.iterdir()
@@ -614,8 +563,7 @@ def _():
                 for p in study_phase.iterdir()
                 if p.is_dir() and not p.name.startswith(".")
                 for r in p.iterdir()
-                if r.is_dir()
-                and (not r.name.startswith(".") and "fail" not in r.name)
+                if r.is_dir() and (not r.name.startswith(".") and not "fail" in r.name)
                 for f in r.iterdir()
                 if f.is_dir() and not f.name.startswith(".")
                 for t in f.iterdir()
@@ -630,16 +578,16 @@ def _():
                 "participant": pl.String,
                 "repetition": pl.Int16,
                 "flow_rate": pl.Float64,
-                "type": pl.String,
+                "technique": pl.String,
                 "file_path": pl.Object,
             },
         )
 
     # sort the dataframe
     data_structure_df = data_structure_df.sort(
-        ["study_phase", "participant", "repetition", "flow_rate", "type"]
+        ["study_phase", "participant", "repetition", "flow_rate", "technique"]
     )
-    return (data_structure_df,)
+    return data_dir, data_structure_df
 
 
 @app.cell(disabled=True, hide_code=True)
@@ -813,60 +761,300 @@ def _(
 
 
 @app.cell
-def _(data_structure_df, load_file):
+def _(data_dir, load_precomputed_df, study_phase_selector):
+    # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
+    # STEP 1: Load the temperature data from the file and prepare it for visualization
+
+    if is_wasm():
+        temperature_data_df = (
+            load_precomputed_df("temperature_data_df")
+            .filter(pl.col("study_phase") == study_phase_selector.value)
+            .select(
+                pl.col("datetime").cast(pl.Datetime),
+                pl.col("time/s").cast(pl.Float64),
+                pl.col("temperature/°C").cast(pl.Float64),
+            )
+        )
+    else:
+        temperature_data_file_path = data_dir / study_phase_selector.value / "Temperature" / "DL-200T_temperature.csv"
+
+        # load the temperature data file (cached via @mo.persistent_cache)
+        temperature_data_df = pl.read_csv(
+            temperature_data_file_path,
+            try_parse_dates=True,
+            decimal_comma=True,
+        ).with_columns(
+            # add column that shows time/h calculated from timestamp (assuming timestamp is in datetime format)
+            (pl.col("datetime").cast(pl.Datetime) - pl.col("datetime").cast(pl.Datetime).min())
+            .dt.total_seconds(fractional=True)
+            .alias("time/s"),
+        ).select(
+            pl.col("datetime"),
+            pl.col("time/s"),
+            pl.col("temperature_C").cast(pl.Float64).alias("temperature/°C"),
+        )
+    return (temperature_data_df,)
+
+
+@app.cell
+def _(temperature_data_df):
+    # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
+    # STEP 2a: Build an area chart to visualize the temperature data over time
+
+    # domain for the temperature values
+    _all_temperature = temperature_data_df["temperature/°C"]
+    _temperature_domain = [_all_temperature.min() - 0.1, _all_temperature.max() + 0.1]
+
+    temperature_time_chart = (
+        alt.Chart(temperature_data_df)
+        .mark_area(
+            line=alt.MarkConfig(color="darkorange"),
+            color=alt.Gradient(
+                gradient="linear",
+                stops=[
+                    alt.GradientStop(color="white", offset=0),
+                    alt.GradientStop(color="orange", offset=1),
+                ],
+                x1=1,
+                x2=1,
+                y1=1,
+                y2=0,
+            ),
+            interpolate='monotone',
+        )
+        .encode(
+            x=alt.X("datetime:T", title=""),
+            y=alt.Y("min(temperature/°C):Q", title="Temperature / °C", scale=alt.Scale(domain=_temperature_domain), stack=None),
+            opacity=alt.value(0.7),
+            tooltip=[
+                alt.Tooltip("datetime:T", title="Datetime"),
+                alt.Tooltip("temperature/°C:Q", title="Temperature / °C", format=".2f"),
+            ],
+        )
+        .properties(
+            width=975,
+            height=150,
+        )
+    )
+    return (temperature_time_chart,)
+
+
+@app.cell
+def _(
+    cd_cycling_filtered_df,
+    eis_filtered_df,
+    flow_rate_selector,
+    participant_selector,
+    polarisation_filtered_df,
+    repetition_selector,
+    study_phase_selector,
+    temperature_time_chart,
+    wheel_zoom_x,
+    wheel_zoom_xy,
+    wheel_zoom_y,
+):
+    # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
+    # STEP 2b: Build a Gantt chart showing the experiment time ranges for each participant and experiment technique, and overlay it with the temperature data
+
+    # create a dataframe containing the start times of the first experiment of a participant and the end time of the last experiment of a participant (within a study phase) over all repetitions for each of the experiment phases (Impedance, Polarisation, Charge-discharge cycling)). The dataframe should have columns (study_phase, participant, technique, start_time/s, end_time/s), where technique is the experiment technique.
+    def _ranges(df, typ):
+        return (
+            df.filter(
+                pl.col("study_phase").is_in([study_phase_selector.value])
+                & pl.col("participant").is_in(participant_selector.value)
+                & pl.col("repetition").is_in(repetition_selector.value)
+                & pl.col("flow_rate").is_in(flow_rate_selector.value)
+            )
+            .group_by(
+                "study_phase", 
+                "participant",
+                "repetition",
+            ).agg(
+                pl.col("datetime").min().alias("start_datetime"),
+                pl.col("datetime").max().alias("end_datetime"),
+            )
+            .with_columns(
+                pl.lit(typ).alias("technique")
+            )
+            .select(
+                "study_phase",
+                "participant",
+                "repetition",
+                "technique",
+                pl.col("start_datetime").cast(pl.Datetime),
+                pl.col("end_datetime").cast(pl.Datetime),
+            )
+        )
+
+    _experiment_schedules = (
+        pl.DataFrame(schema={
+            "study_phase": pl.String,
+            "participant": pl.String,
+            "repetition": pl.Int32,
+            "technique": pl.String,
+            "start_datetime": pl.Datetime,
+            "end_datetime": pl.Datetime,
+        })
+        .vstack(_ranges(eis_filtered_df, "Impedance"))
+        .vstack(_ranges(polarisation_filtered_df, "Polarisation"))
+        .vstack(_ranges(cd_cycling_filtered_df, "Charge-discharge"))
+        .sort(["study_phase", "start_datetime"])
+    )
+
+    # create a Gantt chart visualizing the experiment time ranges for each participant and experiment technique, with the x-axis showing the time in days and the y-axis showing the participant. The bars should be colored by experiment technique and have tooltips showing the study phase, participant, experiment technique, start time, and end time.
+    experiment_schedule_chart = (
+        alt.Chart(_experiment_schedules)
+        .mark_bar()
+        .encode(
+            x=alt.X("start_datetime:T", title=""),
+            x2="end_datetime:T",
+            y=alt.Y("participant:N", title=""),
+            yOffset=alt.YOffset("technique:N", sort=["01 impedance", "02 polarisation", "03 charge-discharge"]),
+            color=alt.Color("technique:N", title="Technique"),
+            tooltip=[
+                "study_phase:N",
+                "participant:N",
+                "technique:N",
+                alt.Tooltip("start_datetime:T", title="Start time"),
+                alt.Tooltip("end_datetime:T", title="End time"),
+            ],
+        )
+        .properties(
+            width=975,
+            height=150,
+        )
+    )
+
+    # create a combined chart overlaying the temperature data on the experiment schedule chart
+    combined_temperature_chart = (
+        alt.vconcat(
+            experiment_schedule_chart,
+            temperature_time_chart,
+        )
+        .resolve_scale(x="shared")
+        .properties(
+            title=alt.TitleParams(
+                text="Figure 13. Experiment time ranges with temperature data",
+                subtitle=[
+                    "Combined Gantt chart and line chart visualizing the experiment schedules per participant, along with the temperature data over time. The Gantt chart displays the time ranges of the different", 
+                    "techniques: Impedance spectroscopy (orange), polarisation (red), and charge-discharge cycling (blue) for each participant. while the line chart shows the temperature data over time.The x-axis", 
+                    " is shared between the two charts to allow for easy comparison of the experiment schedules with the temperature data.",
+                ],
+                anchor="start",
+                orient="top",
+                offset=20,
+            )
+        )
+        .interactive()
+        .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
+        .configure_legend(
+            title=None,
+            orient="top",
+            direction='horizontal',
+            disable=True,
+        )
+    )
+    return (combined_temperature_chart,)
+
+
+@app.cell
+def _(combined_temperature_chart, temperature_data_df):
+    # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
+    # STEP 3: Display the content of the section and explain what it does
+
+    mo.vstack(
+        [
+            mo.md("## Participant schedules and temperature data"),
+            mo.md("""
+                This section displays the participant schedules and the temperature data recorded during the experiments. It was recorded by a Voltcraft DL-200T temperature logger at a sampling rate of one measurement every 60 s. The sensor was positioned at a central spot on a shelf within the laboratory (approximately 1 – 1.5 m away from each of the RFB experiments).
+            """),
+            mo.md("<br>"),
+            mo.md("### Raw data exploration"),
+            mo.md("""
+                The expandable sections enables you to explore the raw temperature data in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
+            """),
+            mo.accordion(
+                {
+                    "Data table": temperature_data_df,
+                    "Data explorer": mo.ui.data_explorer(temperature_data_df),
+                },
+                lazy=True,
+                multiple=True,
+            ),
+            mo.md("<br>"),
+            mo.md("### Participant schedules and temperature over time"),
+            mo.md(f"""
+                The plot shows the participant schedules and the temperature data over time. You can use this plot to analyze the temperature behavior during the experiments and identify trends or differences between different time periods. The **average temperature** over the recorded time period was **{temperature_data_df["temperature/°C"].mean():.1f} °C ± {(temperature_data_df["temperature/°C"].std() if len(temperature_data_df) > 1 else 0):.1f} °C** (uncertainty: standard deviation) with a **minimum temperature of {temperature_data_df["temperature/°C"].min()} °C** and **maximum temperature of {temperature_data_df["temperature/°C"].max()} °C**.
+            """),
+            mo.md("<br>"),
+            combined_temperature_chart,
+        ]
+    )
+    return
+
+
+@app.cell
+def _(data_structure_df, load_file, load_precomputed_df):
     # IMPEDANCE SPECTROSCOPY EVALUATION
     # STEP 1a: Load ALL EIS files from the full data_structure_df into a single flat DataFrame.
     # Filtering by UI selectors is applied later at chart/computation time.
 
-    # filter out impedance spectroscopy files from the full (unfiltered) structure
-    _df_eis = data_structure_df.filter(pl.col("type") == "01 eis")
+    if is_wasm():
+        eis_flat_df = load_precomputed_df("eis_flat_df")
+    else:
+        # filter out impedance spectroscopy files from the full (unfiltered) structure
+        _df_eis = data_structure_df.filter(pl.col("technique") == "01 eis")
 
-    # load each file (cached via @mo.persistent_cache) and concatenate
-    # into a single flat DataFrame with metadata columns
-    _frames = []
-    for _row in _df_eis.iter_rows(named=True):
-        _data = load_file(_row["file_path"], ["PEIS", "GEIS"])
-        if _data is not None:
-            # rename columns to have consistent naming across files
-            _data = _data.rename(
-                {
-                    "cycle number": "cycle",
-                },
-                strict=False,
+        # load each file (cached via @mo.persistent_cache) and concatenate
+        # into a single flat DataFrame with metadata columns
+        _frames = []
+        for _row in _df_eis.iter_rows(named=True):
+            try:
+                _data = load_file(_row["file_path"], ["PEIS", "GEIS"])
+            except Exception as e:
+                print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
+                continue
+            if _data is not None:
+                # rename columns to have consistent naming across files
+                _data = _data.rename(
+                    {
+                        "cycle number": "cycle",
+                    },
+                    strict=False,
 
-            )
-
-            _frames.append(
-                _data.with_columns(
-                    pl.lit(_row["study_phase"]).alias("study_phase"),
-                    pl.lit(_row["participant"]).alias("participant"),
-                    pl.lit(_row["repetition"]).alias("repetition"),
-                    pl.lit(_row["flow_rate"]).alias("flow_rate"),
-                    # shift study_phase, etc. to the leftmost position for easier access later on
-                ).select(
-                    [
-                        "study_phase",
-                        "participant",
-                        "repetition",
-                        "flow_rate",
-                        *[
-                            col
-                            for col in _data.columns
-                            if col
-                            not in [
-                                "study_phase",
-                                "participant",
-                                "repetition",
-                                "flow_rate",
-                            ]
-                        ],
-                    ]
                 )
-            )
 
-    eis_flat_df = (
-        pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
-    )
+                _frames.append(
+                    _data.with_columns(
+                        pl.lit(_row["study_phase"]).alias("study_phase"),
+                        pl.lit(_row["participant"]).alias("participant"),
+                        pl.lit(_row["repetition"]).alias("repetition"),
+                        pl.lit(_row["flow_rate"]).alias("flow_rate"),
+                        # shift study_phase, etc. to the leftmost position for easier access later on
+                    ).select(
+                        [
+                            "study_phase",
+                            "participant",
+                            "repetition",
+                            "flow_rate",
+                            *[
+                                col
+                                for col in _data.columns
+                                if col
+                                not in [
+                                    "study_phase",
+                                    "participant",
+                                    "repetition",
+                                    "flow_rate",
+                                ]
+                            ],
+                        ]
+                    )
+                )
+
+        eis_flat_df = (
+            pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
+        )
     return (eis_flat_df,)
 
 
@@ -1278,61 +1466,68 @@ def section_impedance_spectroscopy(
 
 
 @app.cell
-def _(data_structure_df, load_file):
+def _(data_structure_df, load_file, load_precomputed_df):
     # POLARISATION DATA EVALUATION
     # STEP 1a: Load ALL polarisation files from the full data_structure_df into a single flat DataFrame.
 
-    # filter out polarisation files from the full (unfiltered) structure
-    _df_pol = data_structure_df.filter(pl.col("type") == "02 polarisation")
+    if is_wasm():
+        polarisation_flat_df = load_precomputed_df("polarisation_flat_df")
+    else:
+        # filter out polarisation files from the full (unfiltered) structure
+        _df_pol = data_structure_df.filter(pl.col("technique") == "02 polarisation")
 
-    # load each file (cached per file via @mo.persistent_cache) and concatenate
-    # into a single flat DataFrame with metadata columns
-    _frames = []
-    for _row in _df_pol.iter_rows(named=True):
-        _data = load_file(_row["file_path"], ["CP"])
-        if _data is not None:
-            # rename current and voltage columns
-            _data = _data.rename(
-                {
-                    "<I>/mA": "current/mA",
-                    "I/mA": "current/mA",
-                    "<Ewe>/V": "voltage/V",
-                    "Ewe/V": "voltage/V",
-                    "cycle number": "cycle",
-                },
-                strict=False,
-            )
-            _frames.append(
-                _data.with_columns(
-                    pl.lit(_row["study_phase"]).alias("study_phase"),
-                    pl.lit(_row["participant"]).alias("participant"),
-                    pl.lit(_row["repetition"]).alias("repetition"),
-                    pl.lit(_row["flow_rate"]).alias("flow_rate"),
-                    # shift study_phase, etc. to the leftmost position for easier access later on
-                ).select(
-                    [
-                        "study_phase",
-                        "participant",
-                        "repetition",
-                        "flow_rate",
-                        *[
-                            col
-                            for col in _data.columns
-                            if col
-                            not in [
-                                "study_phase",
-                                "participant",
-                                "repetition",
-                                "flow_rate",
-                            ]
-                        ],
-                    ]
+        # load each file (cached per file via @mo.persistent_cache) and concatenate
+        # into a single flat DataFrame with metadata columns
+        _frames = []
+        for _row in _df_pol.iter_rows(named=True):
+            try:
+                _data = load_file(_row["file_path"], ["CP"])    
+            except Exception as e:
+                print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
+                continue
+            if _data is not None:
+                # rename current and voltage columns
+                _data = _data.rename(
+                    {
+                        "<I>/mA": "current/mA",
+                        "I/mA": "current/mA",
+                        "<Ewe>/V": "voltage/V",
+                        "Ewe/V": "voltage/V",
+                        "cycle number": "cycle",
+                    },
+                    strict=False,
                 )
-            )
+                _frames.append(
+                    _data.with_columns(
+                        pl.lit(_row["study_phase"]).alias("study_phase"),
+                        pl.lit(_row["participant"]).alias("participant"),
+                        pl.lit(_row["repetition"]).alias("repetition"),
+                        pl.lit(_row["flow_rate"]).alias("flow_rate"),
+                        # shift study_phase, etc. to the leftmost position for easier access later on
+                    ).select(
+                        [
+                            "study_phase",
+                            "participant",
+                            "repetition",
+                            "flow_rate",
+                            *[
+                                col
+                                for col in _data.columns
+                                if col
+                                not in [
+                                    "study_phase",
+                                    "participant",
+                                    "repetition",
+                                    "flow_rate",
+                                ]
+                            ],
+                        ]
+                    )
+                )
 
-    polarisation_flat_df = (
-        pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
-    )
+        polarisation_flat_df = (
+            pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
+        )
     return (polarisation_flat_df,)
 
 
@@ -1850,74 +2045,80 @@ def section_polarisation(
 
 
 @app.cell
-def _(data_structure_df, load_file):
+def _(data_structure_df, load_file, load_precomputed_df):
     # CHARGE-DISCHARGE CYCLING EVALUATION
     # STEP 1a: Load ALL charge-discharge files from the full data_structure_df into a single flat DataFrame.
     # Filtering by UI selectors is applied later at chart/computation time.
 
-    # filter out charge-discharge files from the full (unfiltered) structure
-    _df_cd = data_structure_df.filter(pl.col("type") == "03 charge-discharge")
+    if is_wasm():
+        cd_cycling_flat_df = load_precomputed_df("cd_cycling_flat_df")
+    else:
+        # filter out charge-discharge files from the full (unfiltered) structure
+        _df_cd = data_structure_df.filter(pl.col("technique") == "03 charge-discharge")
 
-    # load each file (cached per file via @mo.persistent_cache) and concatenate
-    # into a single flat DataFrame with metadata columns
-    _frames = []
-    for _row in _df_cd.iter_rows(named=True):
-        _data = load_file(_row["file_path"], ["GCPL"])
-        if _data is not None:
-            print(_data.columns)
-            # rename current and voltage columns
-            _data = _data.rename(
-                {
-                    "<I>/mA": "current/mA",
-                    "I/mA": "current/mA",
-                    "<Ewe>/V": "voltage/V",
-                    "Ewe/V": "voltage/V",
-                },
-                strict=False,
-            )
-
-            # if no current column is found, try to extract it from the time and capacity columns
-            if "current/mA" not in _data.columns and "dq/mA.h" in _data.columns:
-                # compute current from capacity and time (I = dQ/dt)
-                _data = _data.with_columns(
-                    (
-                        pl.col("dq/mA.h").diff().fill_null(0)
-                        / pl.col("time/s").diff().fill_null(1)
-                        * 3600
-                    ).alias("current/mA")
+        # load each file (cached per file via @mo.persistent_cache) and concatenate
+        # into a single flat DataFrame with metadata columns
+        _frames = []
+        for _row in _df_cd.iter_rows(named=True):
+            try:
+                _data = load_file(_row["file_path"], ["GCPL"])    
+            except Exception as e:
+                print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
+                continue
+            if _data is not None:
+                # rename current and voltage columns
+                _data = _data.rename(
+                    {
+                        "<I>/mA": "current/mA",
+                        "I/mA": "current/mA",
+                        "<Ewe>/V": "voltage/V",
+                        "Ewe/V": "voltage/V",
+                    },
+                    strict=False,
                 )
 
-            _frames.append(
-                _data.with_columns(
-                    pl.lit(_row["study_phase"]).alias("study_phase"),
-                    pl.lit(_row["participant"]).alias("participant"),
-                    pl.lit(_row["repetition"]).alias("repetition"),
-                    pl.lit(_row["flow_rate"]).alias("flow_rate"),
-                    # shift study_phase, etc. to the leftmost position for easier access later on
-                ).select(
-                    [
-                        "study_phase",
-                        "participant",
-                        "repetition",
-                        "flow_rate",
-                        *[
-                            col
-                            for col in _data.columns
-                            if col
-                            not in [
-                                "study_phase",
-                                "participant",
-                                "repetition",
-                                "flow_rate",
-                            ]
-                        ],
-                    ]
-                )
-            )
+                # if no current column is found, try to extract it from the time and capacity columns
+                if "current/mA" not in _data.columns and "dq/mA.h" in _data.columns:
+                    # compute current from capacity and time (I = dQ/dt)
+                    _data = _data.with_columns(
+                        (
+                            pl.col("dq/mA.h").diff().fill_null(0)
+                            / pl.col("time/s").diff().fill_null(1)
+                            * 3600
+                        ).alias("current/mA")
+                    )
 
-    cd_cycling_flat_df = (
-        pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
-    )
+                _frames.append(
+                    _data.with_columns(
+                        pl.lit(_row["study_phase"]).alias("study_phase"),
+                        pl.lit(_row["participant"]).alias("participant"),
+                        pl.lit(_row["repetition"]).alias("repetition"),
+                        pl.lit(_row["flow_rate"]).alias("flow_rate"),
+                        # shift study_phase, etc. to the leftmost position for easier access later on
+                    ).select(
+                        [
+                            "study_phase",
+                            "participant",
+                            "repetition",
+                            "flow_rate",
+                            *[
+                                col
+                                for col in _data.columns
+                                if col
+                                not in [
+                                    "study_phase",
+                                    "participant",
+                                    "repetition",
+                                    "flow_rate",
+                                ]
+                            ],
+                        ]
+                    )
+                )
+
+        cd_cycling_flat_df = (
+            pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
+        )
     return (cd_cycling_flat_df,)
 
 
@@ -2639,6 +2840,7 @@ def section_charge_discharge_cycling(
     cd_cycling_filtered_df,
     cd_cycling_initial_discharge_capacity,
     slider_half_cycle,
+    theoretical_capacity_mAh,
 ):
     mo.vstack(
         [
@@ -2674,7 +2876,7 @@ def section_charge_discharge_cycling(
             mo.md("<br>"),
             mo.md("### Capacity distribution per participant and repetition"),
             mo.md(f"""
-                These plots show the distribution of capacity values across all cycles for each participant and repetition, respectively. The boxplots display the median, interquartile range, and outliers of the capacity values, allowing you to compare the capacity distributions between participants and repetitions and identify trends or differences in the capacity performance. The average **initial (discharge) capacity** over the selected dataset ({len(cd_cycling_initial_discharge_capacity)} experiments) is **{cd_cycling_initial_discharge_capacity["capacity/mAh"].mean():.1f} mAh ± {(cd_cycling_initial_discharge_capacity["capacity/mAh"].std() if len(cd_cycling_initial_discharge_capacity) > 1 else 0):.1f} mAh** (uncertainty: standard deviation), which represents an average **capacity utilization of {cd_cycling_initial_discharge_capacity["capacity/mAh"].mean() / (100 * 26.8 * 0.2):.1%}** with respect to the theoretical capacity as per the protocol defined electrolyte composition (0.2 M redox-active species, 100 mL).
+                These plots show the distribution of capacity values across all cycles for each participant and repetition, respectively. The boxplots display the median, interquartile range, and outliers of the capacity values, allowing you to compare the capacity distributions between participants and repetitions and identify trends or differences in the capacity performance. The average **initial (discharge) capacity** over the selected dataset ({len(cd_cycling_initial_discharge_capacity)} experiments) is **{cd_cycling_initial_discharge_capacity["capacity/mAh"].mean():.1f} mAh ± {(cd_cycling_initial_discharge_capacity["capacity/mAh"].std() if len(cd_cycling_initial_discharge_capacity) > 1 else 0):.1f} mAh** (uncertainty: standard deviation), which represents an average **capacity utilization of {(cd_cycling_initial_discharge_capacity["capacity/mAh"].mean() / theoretical_capacity_mAh):.1%}** with respect to the theoretical capacity as per the protocol defined electrolyte composition (0.2 M redox-active species).
             """),
             mo.md("<br>"),
             mo.hstack(
@@ -2695,6 +2897,11 @@ def section_charge_discharge_cycling(
             mo.md("<br>"),
         ]
     )
+    return
+
+
+@app.cell
+def _():
     return
 
 
