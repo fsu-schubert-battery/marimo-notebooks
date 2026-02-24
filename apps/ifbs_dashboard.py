@@ -56,8 +56,7 @@ with app.setup:
     # visualization
     import altair as alt
 
-    if not is_wasm():
-        alt.data_transformers.enable("vegafusion")
+    alt.data_transformers.enable("vegafusion")
 
 
 @app.cell(hide_code=True)
