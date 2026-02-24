@@ -220,7 +220,7 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _(techniqueError):
+def _():
     # COMPUTATION HELPERS
 
     def get_x_intercepts(
@@ -247,7 +247,7 @@ def _(techniqueError):
         """
 
         if isinstance(df, pl.Series):
-            raise techniqueError(
+            raise TypeError(
                 "get_x_intercepts expected a Polars DataFrame/LazyFrame, got a Series. "
                 "Pass the full table (with group/x/y columns), not df['col']."
             )
