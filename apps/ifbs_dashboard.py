@@ -5,9 +5,10 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "marimo[recommended]>=0.20.1",
-#     "galvani>=0.4.1",
-#     "yadg>=6.2.0",
-#     "polars>=0.19.0"
+#     "polars>=0.19.0",
+#     "scipy>=1.11.0",
+#     "numpy>=1.24.0",
+#     "altair>=5.0.0",
 # ]
 #
 # [tool.marimo.runtime]
@@ -29,12 +30,23 @@ with app.setup:
     from typing import Any, Optional
     from datetime import datetime
 
+    # detect WASM runtime (deployed marimo notebook in browser/pyodide)
+    # must be defined before conditional imports below
+    def is_wasm() -> bool:
+        return "pyodide" in sys.modules
+
     # data handling
     import tempfile
     import json
     import polars as pl
-    from galvani.BioLogic import MPRfile
-    from yadg.subcommands import extract as yadg_extract
+
+    # native-only dependencies (C-extensions, not available in Pyodide)
+    if not is_wasm():
+        from galvani.BioLogic import MPRfile
+        from yadg.subcommands import extract as yadg_extract
+    else:
+        MPRfile = None
+        yadg_extract = None
 
     # computation
     from functools import partial
@@ -44,11 +56,8 @@ with app.setup:
     # visualization
     import altair as alt
 
-    alt.data_transformers.enable("vegafusion")
-
-    # detect WASM runtime (deployed marimo notebook in browser/pyodide)
-    def is_wasm() -> bool:
-        return "pyodide" in sys.modules
+    if not is_wasm():
+        alt.data_transformers.enable("vegafusion")
 
 
 @app.cell(hide_code=True)
@@ -61,8 +70,10 @@ def _():
     # MPR Files
     ######################################
 
-    # extract metadata only
+    # extract metadata only (requires yadg — native only)
     def mpr_extract_metadata(path: str | Path, file_type: Optional[str] = None) -> dict:
+        if is_wasm():
+            raise RuntimeError("mpr_extract_metadata is not available in WASM mode")
 
         # check the file_type based on the suffix if not provided
         if file_type is None:
@@ -93,10 +104,12 @@ def _():
             )
             return meta_data, meta_settings
 
-    # get the technique from the metadata
+    # get the technique from the metadata (requires yadg — native only)
     def mpr_get_technique(
         path: str | Path, file_type: Optional[str] = None
     ) -> Optional[str]:
+        if is_wasm():
+            raise RuntimeError("mpr_get_technique is not available in WASM mode")
         _, settings = mpr_extract_metadata(path, file_type)
         return settings.get("technique", None)
 
@@ -138,6 +151,8 @@ def _():
     # cache invalidation is unnecessary.
     @mo.persistent_cache
     def load_file(file_path, technique_filter=None):
+        if is_wasm():
+            raise RuntimeError("load_file is not available in WASM mode — use load_precomputed_df instead")
         file_path = _ensure_local(file_path)
         with open(file_path, "rb") as f:
             if file_path.suffix == ".mpr":
