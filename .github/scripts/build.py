@@ -217,6 +217,15 @@ def main(
         logger.warning("No notebooks or apps found!")
         return
 
+    # Ensure .nojekyll exists at the root of the output directory so GitHub Pages
+    # serves files whose names start with an underscore (e.g. _baseMap-xxx.js).
+    # marimo places .nojekyll next to the HTML, but GitHub Pages only respects it
+    # at the repository / deployment root.
+    nojekyll = output_dir / ".nojekyll"
+    if not nojekyll.exists():
+        nojekyll.touch()
+        logger.info(f"Created {nojekyll}")
+
     # Generate the index.html file that lists all notebooks and apps
     _generate_index(output_dir=output_dir, notebooks_data=notebooks_data, apps_data=apps_data, template_file=template_file)
 
