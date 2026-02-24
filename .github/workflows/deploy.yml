@@ -11,9 +11,12 @@ on:
       - '.github/workflows/deploy.yml'
       - '.github/scripts/build.py'
       - 'apps/**/*.py'
+      - '!apps/ifbs_dashboard.py'
       - 'notebooks/**/*.py'
       - 'templates/**'
-      - 'apps/public/data/*.parquet'
+  workflow_run:
+    workflows: ['Precompute IFBS Parquet']
+    types: [completed]
   workflow_dispatch:    # Allow manual triggering from the GitHub UI
 
 # Concurrency settings to manage multiple workflow runs
@@ -28,10 +31,14 @@ env:
 jobs:
   # The build job exports marimo notebooks to static HTML/WebAssembly
   build:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest  # Use the latest Ubuntu runner
     steps:
       # Check out the repository code
       - uses: actions/checkout@v5
+        with:
+          # For workflow_run, always build from latest main (includes parquet commit from precompute)
+          ref: ${{ github.event_name == 'workflow_run' && 'refs/heads/main' || github.ref }}
 
       # Install uv package manager for faster Python package installation
       - name: 🚀 Install uv
