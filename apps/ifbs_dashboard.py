@@ -48,7 +48,13 @@ with app.setup:
     # visualization
     import altair as alt
 
-    alt.data_transformers.enable("vegafusion")
+    try:
+        import vegafusion
+        alt.data_transformers.enable("vegafusion")
+        print("[Import] Using vegafusion data transformer for Altair charts.")
+    except Exception:
+        alt.data_transformers.enable("default")
+        print("[Import] Using default data transformer for Altair charts.")
 
 
 @app.cell(hide_code=True)
@@ -642,42 +648,75 @@ def _(temperature_data_df):
     # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
     # STEP 2a: Build an area chart to visualize the temperature data over time
 
-    # domain for the temperature values
-    _all_temperature = temperature_data_df["temperature/°C"]
-    _temperature_domain = [_all_temperature.min() - 0.1, _all_temperature.max() + 0.1]
+    # reduce data to mean, min, and max values per 12h
+    temperature_data_filtered_df = (
+        temperature_data_df
+        .with_columns(
+            # truncate datetime to 12h bins for grouping
+            # (e.g., 2024-01-01 08:15 -> 2024-01-01 00:00, 
+            #        2024-01-01 14:30 -> 2024-01-01 12:00, 
+            # etc.)
+            pl.col("datetime").dt.truncate("12h").alias("t_bin")
+        )
+        .group_by(["t_bin"])
+        .agg(
+            # aggregate mean, min, and max value per 12h bin
+            pl.col("temperature/°C").mean().alias("temp_mean"),
+            pl.col("temperature/°C").min().alias("temp_min"),
+            pl.col("temperature/°C").max().alias("temp_max"),
+        )
+        .sort(["t_bin"])
+    )
+
+    # get domain for the temperature values with some padding for better visualization
+    _all_min = temperature_data_filtered_df["temp_min"]
+    _all_max = temperature_data_filtered_df["temp_max"]
+    _temperature_domain = [_all_min.min() - 0.1, _all_max.max() + 0.1]
+
+    # build chart with mean value as line and min-max range as band
+    # A) Base chart to add mean line and band
+    base = alt.Chart(
+        temperature_data_filtered_df
+    ).encode(
+        x=alt.X("t_bin:T", title=""),
+    )
+
+    # B) Band for min-max range
+    band = base.mark_area(
+        interpolate="monotone",
+        color="orange",
+        opacity=0.35,
+    ).encode(
+        y=alt.Y("temp_min:Q", title="Temperature / °C", scale=alt.Scale(domain=_temperature_domain), stack=None),
+        y2=alt.Y2("temp_max:Q"),
+    )
+
+    # C) Mean line
+    mean_line = base.mark_line(
+        point=alt.OverlayMarkDef(
+            shape="circle",
+            size=50,
+            color="darkorange",
+        ),
+        color="darkorange",
+        interpolate="monotone",
+    ).encode(
+        y=alt.Y("temp_mean:Q", title="Temperature / °C", scale=alt.Scale(domain=_temperature_domain), stack=None),
+        tooltip=[
+        alt.Tooltip("t_bin:T", title="Datetime", format="%Y-%m-%d %H:%M:%S"),
+        alt.Tooltip("temp_max:Q", title="Max / °C", format=".2f"),
+        alt.Tooltip("temp_mean:Q", title="Mean / °C", format=".2f"),
+        alt.Tooltip("temp_min:Q", title="Min / °C", format=".2f"),
+        ],
+    )
 
     temperature_time_chart = (
-        alt.Chart(temperature_data_df)
-        .mark_area(
-            line=alt.MarkConfig(color="darkorange"),
-            color=alt.Gradient(
-                gradient="linear",
-                stops=[
-                    alt.GradientStop(color="white", offset=0),
-                    alt.GradientStop(color="orange", offset=1),
-                ],
-                x1=1,
-                x2=1,
-                y1=1,
-                y2=0,
-            ),
-            interpolate='monotone',
-        )
-        .encode(
-            x=alt.X("datetime:T", title=""),
-            y=alt.Y("min(temperature/°C):Q", title="Temperature / °C", scale=alt.Scale(domain=_temperature_domain), stack=None),
-            opacity=alt.value(0.7),
-            tooltip=[
-                alt.Tooltip("datetime:T", title="Datetime"),
-                alt.Tooltip("temperature/°C:Q", title="Temperature / °C", format=".2f"),
-            ],
-        )
+        alt.layer(band + mean_line)
         .properties(
             width=975,
             height=150,
         )
     )
-
     temperature_time_chart
     return (temperature_time_chart,)
 
