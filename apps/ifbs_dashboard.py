@@ -127,142 +127,142 @@ def _():
     return load_precomputed_df, recalculate_time
 
 
-# @app.cell(hide_code=True)
-# def _():
-#     # COMPUTATION HELPERS
+@app.cell(hide_code=True)
+def _():
+    # COMPUTATION HELPERS
 
-#     def get_x_intercepts(
-#         df: pl.DataFrame | pl.LazyFrame,
-#         *,
-#         x: str = "x",
-#         y: str = "y",
-#         group: str = "dataset",
-#         which: str = "all",  # "all" | "first" | "last" | "closest_to_zero"
-#         assume_sorted: bool = False,
-#     ) -> pl.DataFrame:
-#         """
-#         Compute x-axis intercept(s) (roots where y == 0) per group via vectorized
-#         sign-change detection + linear interpolation between adjacent samples.
+    def get_x_intercepts(
+        df: pl.DataFrame | pl.LazyFrame,
+        *,
+        x: str = "x",
+        y: str = "y",
+        group: str = "dataset",
+        which: str = "all",  # "all" | "first" | "last" | "closest_to_zero"
+        assume_sorted: bool = False,
+    ) -> pl.DataFrame:
+        """
+        Compute x-axis intercept(s) (roots where y == 0) per group via vectorized
+        sign-change detection + linear interpolation between adjacent samples.
 
-#         Requirements:
-#           - df must be a Polars DataFrame or LazyFrame (NOT a Series)
-#           - columns: group, x, y must exist and be numeric (x,y)
+        Requirements:
+          - df must be a Polars DataFrame or LazyFrame (NOT a Series)
+          - columns: group, x, y must exist and be numeric (x,y)
 
-#         Performance:
-#           - O(n) if assume_sorted=True and already sorted by [group, x]
-#           - otherwise includes a sort (O(n log n))
-#           - runs lazily if df is LazyFrame; collects only at the end
-#         """
+        Performance:
+          - O(n) if assume_sorted=True and already sorted by [group, x]
+          - otherwise includes a sort (O(n log n))
+          - runs lazily if df is LazyFrame; collects only at the end
+        """
 
-#         if isinstance(df, pl.Series):
-#             raise TypeError(
-#                 "get_x_intercepts expected a Polars DataFrame/LazyFrame, got a Series. "
-#                 "Pass the full table (with group/x/y columns), not df['col']."
-#             )
+        if isinstance(df, pl.Series):
+            raise TypeError(
+                "get_x_intercepts expected a Polars DataFrame/LazyFrame, got a Series. "
+                "Pass the full table (with group/x/y columns), not df['col']."
+            )
 
-#         lf = df.lazy() if isinstance(df, pl.DataFrame) else df
+        lf = df.lazy() if isinstance(df, pl.DataFrame) else df
 
-#         # Ensure we are sorting a frame, not a Series
-#         if not assume_sorted:
-#             lf = lf.sort([group, x])
+        # Ensure we are sorting a frame, not a Series
+        if not assume_sorted:
+            lf = lf.sort([group, x])
 
-#         x_c = pl.col(x)
-#         y_c = pl.col(y)
+        x_c = pl.col(x)
+        y_c = pl.col(y)
 
-#         lf = lf.with_columns(
-#             [
-#                 x_c.shift(1).over(group).alias("_x0"),
-#                 y_c.shift(1).over(group).alias("_y0"),
-#             ]
-#         ).filter(pl.col("_y0").is_not_null())
+        lf = lf.with_columns(
+            [
+                x_c.shift(1).over(group).alias("_x0"),
+                y_c.shift(1).over(group).alias("_y0"),
+            ]
+        ).filter(pl.col("_y0").is_not_null())
 
-#         # Crossing condition (handles exact zeros and sign flips)
-#         crosses = (
-#             (y_c == 0) | (pl.col("_y0") == 0) | (y_c.sign() != pl.col("_y0").sign())
-#         )
+        # Crossing condition (handles exact zeros and sign flips)
+        crosses = (
+            (y_c == 0) | (pl.col("_y0") == 0) | (y_c.sign() != pl.col("_y0").sign())
+        )
 
-#         # Interpolation: x0 - y0*(x-x0)/(y-y0) (avoid div0 by handling exact zeros above)
-#         lf = (
-#             lf.filter(crosses)
-#             .with_columns(
-#                 pl.when(y_c == 0)
-#                 .then(x_c)
-#                 .when(pl.col("_y0") == 0)
-#                 .then(pl.col("_x0"))
-#                 .otherwise(
-#                     pl.col("_x0")
-#                     - pl.col("_y0") * (x_c - pl.col("_x0")) / (y_c - pl.col("_y0"))
-#                 )
-#                 .alias("x_intercept")
-#             )
-#             .select([pl.col(group), pl.col("x_intercept")])
-#         )
+        # Interpolation: x0 - y0*(x-x0)/(y-y0) (avoid div0 by handling exact zeros above)
+        lf = (
+            lf.filter(crosses)
+            .with_columns(
+                pl.when(y_c == 0)
+                .then(x_c)
+                .when(pl.col("_y0") == 0)
+                .then(pl.col("_x0"))
+                .otherwise(
+                    pl.col("_x0")
+                    - pl.col("_y0") * (x_c - pl.col("_x0")) / (y_c - pl.col("_y0"))
+                )
+                .alias("x_intercept")
+            )
+            .select([pl.col(group), pl.col("x_intercept")])
+        )
 
-#         if which == "all":
-#             return lf.collect()
+        if which == "all":
+            return lf.collect()
 
-#         if which == "first":
-#             return (
-#                 lf.group_by(group)
-#                 .agg(pl.col("x_intercept").min().alias("x_intercept"))
-#                 .collect()
-#             )
+        if which == "first":
+            return (
+                lf.group_by(group)
+                .agg(pl.col("x_intercept").min().alias("x_intercept"))
+                .collect()
+            )
 
-#         if which == "last":
-#             return (
-#                 lf.group_by(group)
-#                 .agg(pl.col("x_intercept").max().alias("x_intercept"))
-#                 .collect()
-#             )
+        if which == "last":
+            return (
+                lf.group_by(group)
+                .agg(pl.col("x_intercept").max().alias("x_intercept"))
+                .collect()
+            )
 
-#         if which == "closest_to_zero":
-#             return (
-#                 lf.group_by(group)
-#                 .agg(
-#                     pl.col("x_intercept")
-#                     .sort_by(pl.col("x_intercept").abs())
-#                     .first()
-#                     .alias("x_intercept")
-#                 )
-#                 .collect()
-#             )
+        if which == "closest_to_zero":
+            return (
+                lf.group_by(group)
+                .agg(
+                    pl.col("x_intercept")
+                    .sort_by(pl.col("x_intercept").abs())
+                    .first()
+                    .alias("x_intercept")
+                )
+                .collect()
+            )
 
-#         raise ValueError(
-#             "which must be one of: 'all', 'first', 'last', 'closest_to_zero'."
-#         )
+        raise ValueError(
+            "which must be one of: 'all', 'first', 'last', 'closest_to_zero'."
+        )
 
-#     # define evaluation parameters
-#     def get_linregress_params(
-#         df: pl.DataFrame, x_name: str, y_name: str, with_columns: list
-#     ) -> pl.DataFrame:
+    # define evaluation parameters
+    def get_linregress_params(
+        df: pl.DataFrame, x_name: str, y_name: str, with_columns: list
+    ) -> pl.DataFrame:
 
-#         # sort data by x values for consistent results
-#         df = df.sort(x_name)
+        # sort data by x values for consistent results
+        df = df.sort(x_name)
 
-#         # linear regression: x vs y
-#         if df.height > 2:
-#             x_vals = df[x_name].to_numpy()
-#             y_vals = df[y_name].to_numpy()
+        # linear regression: x vs y
+        if df.height > 2:
+            x_vals = df[x_name].to_numpy()
+            y_vals = df[y_name].to_numpy()
 
-#             # perform linear regression
-#             linregress_res = linregress(x_vals, y_vals)
-#         else:
-#             linregress_res = None
+            # perform linear regression
+            linregress_res = linregress(x_vals, y_vals)
+        else:
+            linregress_res = None
 
-#         return pl.DataFrame(
-#             {
-#                 "slope": [linregress_res.slope if linregress_res else None],
-#                 "intercept": [linregress_res.intercept if linregress_res else None],
-#                 "rvalue": [linregress_res.rvalue if linregress_res else None],
-#                 "pvalue": [linregress_res.pvalue if linregress_res else None],
-#                 "stderr": [linregress_res.stderr if linregress_res else None],
-#             }
-#         ).join(
-#             df.select(with_columns).limit(1),
-#             how="cross",
-#         )
+        return pl.DataFrame(
+            {
+                "slope": [linregress_res.slope if linregress_res else None],
+                "intercept": [linregress_res.intercept if linregress_res else None],
+                "rvalue": [linregress_res.rvalue if linregress_res else None],
+                "pvalue": [linregress_res.pvalue if linregress_res else None],
+                "stderr": [linregress_res.stderr if linregress_res else None],
+            }
+        ).join(
+            df.select(with_columns).limit(1),
+            how="cross",
+        )
 
-#     return get_linregress_params, get_x_intercepts
+    return get_linregress_params, get_x_intercepts
 
 
 @app.cell(hide_code=True)
@@ -833,7 +833,7 @@ def _(
             disable=True,
         )
     )
-    combined_temperature_chart
+
     return (combined_temperature_chart,)
 
 
@@ -923,366 +923,366 @@ def _(
     return (eis_filtered_df,)
 
 
-# @app.cell
-# def _(eis_filtered_df, wheel_zoom_x, wheel_zoom_xy, wheel_zoom_y):
-#     # IMPEDANCE SPECTROSCOPY EVALUATION
-#     # STEP 2: Plot the Nyquist plots for the selected files
+@app.cell
+def _(eis_filtered_df, wheel_zoom_x, wheel_zoom_xy, wheel_zoom_y):
+    # IMPEDANCE SPECTROSCOPY EVALUATION
+    # STEP 2: Plot the Nyquist plots for the selected files
 
-#     # compute per-axis data ranges, then build centered domains with equal span
-#     _re_min = eis_filtered_df["Re(Z)/Ohm"].min()
-#     _re_max = eis_filtered_df["Re(Z)/Ohm"].max()
-#     _im_min = eis_filtered_df["-Im(Z)/Ohm"].min()
-#     _im_max = eis_filtered_df["-Im(Z)/Ohm"].max()
+    # compute per-axis data ranges, then build centered domains with equal span
+    _re_min = eis_filtered_df["Re(Z)/Ohm"].min()
+    _re_max = eis_filtered_df["Re(Z)/Ohm"].max()
+    _im_min = eis_filtered_df["-Im(Z)/Ohm"].min()
+    _im_max = eis_filtered_df["-Im(Z)/Ohm"].max()
 
-#     # use the larger of the two ranges so both axes cover the same span
-#     _re_range = _re_max - _re_min
-#     _im_range = _im_max - _im_min
-#     _max_range = max(_re_range, _im_range)
-#     _padding = _max_range * 0.05
+    # use the larger of the two ranges so both axes cover the same span
+    _re_range = _re_max - _re_min
+    _im_range = _im_max - _im_min
+    _max_range = max(_re_range, _im_range)
+    _padding = _max_range * 0.05
 
-#     # center each axis's domain around its own midpoint
-#     _re_mid = (_re_min + _re_max) / 2
-#     _im_mid = (_im_min + _im_max) / 2
-#     _half = (_max_range / 2) + _padding
-#     _re_domain = [_re_mid - _half, _re_mid + _half]
-#     _im_domain = [_im_mid - _half, _im_mid + _half]
+    # center each axis's domain around its own midpoint
+    _re_mid = (_re_min + _re_max) / 2
+    _im_mid = (_im_min + _im_max) / 2
+    _half = (_max_range / 2) + _padding
+    _re_domain = [_re_mid - _half, _re_mid + _half]
+    _im_domain = [_im_mid - _half, _im_mid + _half]
 
-#     # create selectors and bind them to the legend
-#     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
-#     _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
-#     _flow_rate_selection = alt.selection_point(fields=["flow_rate"], bind="legend")
+    # create selectors and bind them to the legend
+    _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
+    _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
+    _flow_rate_selection = alt.selection_point(fields=["flow_rate"], bind="legend")
 
-#     # select only columns needed for the chart
-#     _chart_data = eis_filtered_df.select(
-#         [
-#             "study_phase",
-#             "participant",
-#             "repetition",
-#             "flow_rate",
-#             "cycle",
-#             "Re(Z)/Ohm",
-#             "-Im(Z)/Ohm",
-#             "freq/Hz",
-#         ]
-#     )
+    # select only columns needed for the chart
+    _chart_data = eis_filtered_df.select(
+        [
+            "study_phase",
+            "participant",
+            "repetition",
+            "flow_rate",
+            "cycle",
+            "Re(Z)/Ohm",
+            "-Im(Z)/Ohm",
+            "freq/Hz",
+        ]
+    )
 
-#     # build Nyquist plot from single flat DataFrame
-#     nyquist_plots = (
-#         (
-#             alt.Chart(_chart_data)
-#             .mark_point()
-#             .encode(
-#                 x=alt.X(
-#                     "Re(Z)/Ohm:Q",
-#                     title="Re(Z) / Ω",
-#                     scale=alt.Scale(domain=_re_domain),
-#                 ),
-#                 y=alt.Y(
-#                     "-Im(Z)/Ohm:Q",
-#                     title="-Im(Z) / Ω",
-#                     scale=alt.Scale(domain=_im_domain),
-#                 ),
-#                 color=alt.Color("participant:N", title="Participant"),
-#                 shape=alt.Shape("repetition:N", title="Repetition"),
-#                 size=alt.Size(
-#                     "flow_rate:N",
-#                     title="Flow Rate (mL min⁻¹)",
-#                     scale=alt.Scale(range=[30, 150]),
-#                 ),
-#                 opacity=alt.condition(
-#                     _participant_selection
-#                     & _repetition_selection
-#                     & _flow_rate_selection,
-#                     alt.value(1.0),
-#                     alt.value(0.025),
-#                 ),
-#                 tooltip=[
-#                     "study_phase:O",
-#                     "participant:N",
-#                     "repetition:O",
-#                     "flow_rate:O",
-#                     "cycle:O",
-#                     alt.Tooltip("freq/Hz:Q", format=".1f"),
-#                     "Re(Z)/Ohm:Q",
-#                     "-Im(Z)/Ohm:Q",
-#                 ],
-#             )
-#             .properties(
-#                 title="Nyquist Plot",
-#                 width=400,
-#                 height=400,
-#             )
-#             .add_params(
-#                 _participant_selection,
-#                 _repetition_selection,
-#                 _flow_rate_selection,
-#             )
-#         )
-#         .properties(
-#             title=alt.TitleParams(
-#                 text="Figure 1. Nyquist plots for selected participants and repetitions",
-#                 subtitle="Nyquist plots showing the real and imaginary parts of the impedance for each selected file.",
-#                 anchor="start",
-#                 orient="top",
-#                 offset=20,
-#             )
-#         )
-#         .interactive()
-#         .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
-#     )
-#     return (nyquist_plots,)
-
-
-# @app.cell
-# def _(eis_filtered_df, get_x_intercepts):
-#     # IMPEDANCE SPECTROSCOPY EVALUATION
-#     # STEP 3a: Extract the ohmic series resistance from the EIS data into a separate dataframe
-
-#     # partition by metadata columns and compute x-intercepts per group,
-#     # since get_x_intercepts uses .over(group) internally and "cycle number"
-#     # values repeat across different files
-#     _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
-#     series_resistance_df = pl.concat(
-#         [
-#             get_x_intercepts(
-#                 df=group_df,
-#                 x="Re(Z)/Ohm",
-#                 y="-Im(Z)/Ohm",
-#                 group="cycle",
-#                 which="last",
-#                 assume_sorted=False,
-#             )
-#             .with_columns(pl.lit(group_df[col][0]).alias(col) for col in _meta_cols)
-#             .select(
-#                 *_meta_cols,
-#                 pl.col("cycle"),
-#                 pl.col("x_intercept").alias("ESR/Ohm"),
-#             )
-#             for group_df in eis_filtered_df.partition_by(_meta_cols, as_dict=False)
-#         ],
-#         how="vertical_relaxed",
-#     )
-#     return (series_resistance_df,)
+    # build Nyquist plot from single flat DataFrame
+    nyquist_plots = (
+        (
+            alt.Chart(_chart_data)
+            .mark_point()
+            .encode(
+                x=alt.X(
+                    "Re(Z)/Ohm:Q",
+                    title="Re(Z) / Ω",
+                    scale=alt.Scale(domain=_re_domain),
+                ),
+                y=alt.Y(
+                    "-Im(Z)/Ohm:Q",
+                    title="-Im(Z) / Ω",
+                    scale=alt.Scale(domain=_im_domain),
+                ),
+                color=alt.Color("participant:N", title="Participant"),
+                shape=alt.Shape("repetition:N", title="Repetition"),
+                size=alt.Size(
+                    "flow_rate:N",
+                    title="Flow Rate (mL min⁻¹)",
+                    scale=alt.Scale(range=[30, 150]),
+                ),
+                opacity=alt.condition(
+                    _participant_selection
+                    & _repetition_selection
+                    & _flow_rate_selection,
+                    alt.value(1.0),
+                    alt.value(0.025),
+                ),
+                tooltip=[
+                    "study_phase:O",
+                    "participant:N",
+                    "repetition:O",
+                    "flow_rate:O",
+                    "cycle:O",
+                    alt.Tooltip("freq/Hz:Q", format=".1f"),
+                    "Re(Z)/Ohm:Q",
+                    "-Im(Z)/Ohm:Q",
+                ],
+            )
+            .properties(
+                title="Nyquist Plot",
+                width=400,
+                height=400,
+            )
+            .add_params(
+                _participant_selection,
+                _repetition_selection,
+                _flow_rate_selection,
+            )
+        )
+        .properties(
+            title=alt.TitleParams(
+                text="Figure 1. Nyquist plots for selected participants and repetitions",
+                subtitle="Nyquist plots showing the real and imaginary parts of the impedance for each selected file.",
+                anchor="start",
+                orient="top",
+                offset=20,
+            )
+        )
+        .interactive()
+        .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
+    )
+    return (nyquist_plots,)
 
 
-# @app.cell
-# def esr_per_participant_1(series_resistance_df):
-#     # IMPEDANCE SPECTROSCOPY EVALUATION
-#     # STEP 3b: Plot series resistance values per participants (mean value over repetitions)
-#     #          with error bars representing the standard deviation of the mean)
+@app.cell
+def _(eis_filtered_df, get_x_intercepts):
+    # IMPEDANCE SPECTROSCOPY EVALUATION
+    # STEP 3a: Extract the ohmic series resistance from the EIS data into a separate dataframe
 
-#     # create a bar chart to compare the ESR values across participants and repetitions
-#     series_resistance_per_participant = series_resistance_df.group_by(
-#         "study_phase",
-#         "participant",
-#         "flow_rate",
-#     ).agg(
-#         pl.col("ESR/Ohm").mean().alias("mean_esr"),
-#         pl.col("ESR/Ohm").std().alias("std_esr"),
-#         pl.len().alias("cycles"),
-#     ).sort(["study_phase", "participant", "flow_rate"])
-
-#     _bars = (
-#         alt.Chart(series_resistance_per_participant)
-#         .mark_bar(
-#             opacity=1
-#         )
-#         .encode(
-#             x=alt.X("participant:N", title="Participant"),
-#             y=alt.Y("mean_esr:Q", title="Mean ESR / Ohm"),
-#             xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
-#             color=alt.Color("participant:N", title="Participant"),
-#             opacity=alt.Opacity("flow_rate:N", title="Flow Rate", scale=alt.Scale(range=[0.33, 1.0])),
-#             tooltip=[
-#                 "study_phase:N",
-#                 "participant:N",
-#                 "flow_rate:O",
-#                 alt.Tooltip("mean_esr:Q", format=".4f"),
-#                 alt.Tooltip("std_esr:Q", format=".4f"),
-#                 "cycles:O",
-#             ],
-#         )
-#     )
-
-#     _errs = (
-#         alt.Chart(series_resistance_per_participant)
-#         .mark_errorbar(
-#             ticks=True,
-#             size=10,
-#         )
-#         .encode(
-#             x="participant:N",
-#             y=alt.Y("mean_esr:Q", title="Mean ESR / Ohm"),
-#             yError="std_esr:Q",
-#             xOffset="flow_rate:O",
-#             color=alt.value("#000000"),
-#         )
-#     )
-
-#     series_resistance_per_participant_plot = (
-#         alt.layer(_bars, _errs)
-#         .properties(
-#             title=alt.TitleParams(
-#                 text="Figure 2. ESR per participant",
-#                 subtitle="ESR values for each participant across selected repetitions.",
-#                 anchor="start",
-#                 orient="top",
-#                 offset=20,
-#             ),
-#             width=325,
-#         )
-#         .configure_axisX(
-#             labelAngle=-45
-#         )
-#     )
-#     return (series_resistance_per_participant_plot,)
+    # partition by metadata columns and compute x-intercepts per group,
+    # since get_x_intercepts uses .over(group) internally and "cycle number"
+    # values repeat across different files
+    _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
+    series_resistance_df = pl.concat(
+        [
+            get_x_intercepts(
+                df=group_df,
+                x="Re(Z)/Ohm",
+                y="-Im(Z)/Ohm",
+                group="cycle",
+                which="last",
+                assume_sorted=False,
+            )
+            .with_columns(pl.lit(group_df[col][0]).alias(col) for col in _meta_cols)
+            .select(
+                *_meta_cols,
+                pl.col("cycle"),
+                pl.col("x_intercept").alias("ESR/Ohm"),
+            )
+            for group_df in eis_filtered_df.partition_by(_meta_cols, as_dict=False)
+        ],
+        how="vertical_relaxed",
+    )
+    return (series_resistance_df,)
 
 
-# @app.cell
-# def esr_per_repetition(series_resistance_df):
-#     # IMPEDANCE SPECTROSCOPY EVALUATION
-#     # STEP 3c: Plot series resistance values over repetition (mean value over participants)
-#     #          with error bars representing the standard deviation of the mean)
+@app.cell
+def esr_per_participant_1(series_resistance_df):
+    # IMPEDANCE SPECTROSCOPY EVALUATION
+    # STEP 3b: Plot series resistance values per participants (mean value over repetitions)
+    #          with error bars representing the standard deviation of the mean)
 
-#     # create a bar chart to compare the ESR values across participants and repetitions
-#     series_resistance_per_repetition = series_resistance_df.group_by(
-#         "study_phase",
-#         "repetition",
-#         "flow_rate",
-#     ).agg(
-#         pl.col("ESR/Ohm").mean().alias("mean_esr"),
-#         pl.col("ESR/Ohm").std().alias("std_esr"),
-#         pl.len().alias("cycles"),
-#     ).sort(["study_phase", "repetition", "flow_rate"])
+    # create a bar chart to compare the ESR values across participants and repetitions
+    series_resistance_per_participant = series_resistance_df.group_by(
+        "study_phase",
+        "participant",
+        "flow_rate",
+    ).agg(
+        pl.col("ESR/Ohm").mean().alias("mean_esr"),
+        pl.col("ESR/Ohm").std().alias("std_esr"),
+        pl.len().alias("cycles"),
+    ).sort(["study_phase", "participant", "flow_rate"])
 
-#     # build domains for the ESR values
-#     _all_esr = series_resistance_df["ESR/Ohm"]
-#     _all_mean_esr = series_resistance_per_repetition["mean_esr"]
-#     _esr_domain = [_all_esr.min() / 1.1, _all_esr.max() * 1.1]
-#     _mean_esr_domain = [_all_mean_esr.min() / 1.1, _all_mean_esr.max() * 1.1]
+    _bars = (
+        alt.Chart(series_resistance_per_participant)
+        .mark_bar(
+            opacity=1
+        )
+        .encode(
+            x=alt.X("participant:N", title="Participant"),
+            y=alt.Y("mean_esr:Q", title="Mean ESR / Ohm"),
+            xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
+            color=alt.Color("participant:N", title="Participant"),
+            opacity=alt.Opacity("flow_rate:N", title="Flow Rate", scale=alt.Scale(range=[0.33, 1.0])),
+            tooltip=[
+                "study_phase:N",
+                "participant:N",
+                "flow_rate:O",
+                alt.Tooltip("mean_esr:Q", format=".4f"),
+                alt.Tooltip("std_esr:Q", format=".4f"),
+                "cycles:O",
+            ],
+        )
+    )
 
-#     # construct a box plot
-#     _boxplot = (
-#         alt.Chart(
-#             series_resistance_df,
-#         )
-#         .mark_boxplot(
-#             size=25,
-#             ticks={"size": 10},
-#             median={"color": "black", "thickness": 2},
-#             outliers={"size": 15, "shape": "circle"},
-#         )
-#         .encode(
-#             x=alt.X("repetition:O", title="Repetition"),
-#             y=alt.Y(
-#                 "ESR/Ohm:Q", title="ESR / Ohm", scale=alt.Scale(domain=_esr_domain)
-#             ),
-#             xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
-#             color=alt.Color("repetition:O", title="Repetition"),
-#             opacity=alt.Opacity("flow_rate:O", title="Flow Rate", scale=alt.Scale(range=[1, 0.33])),
-#         )
-#     )
+    _errs = (
+        alt.Chart(series_resistance_per_participant)
+        .mark_errorbar(
+            ticks=True,
+            size=10,
+        )
+        .encode(
+            x="participant:N",
+            y=alt.Y("mean_esr:Q", title="Mean ESR / Ohm"),
+            yError="std_esr:Q",
+            xOffset="flow_rate:O",
+            color=alt.value("#000000"),
+        )
+    )
 
-#     _mean = (
-#         alt.Chart(series_resistance_per_repetition)
-#         .mark_point(
-#             color="black",
-#             opacity=0.75,
-#             shape="circle",
-#             size=50,
-#         )
-#         .encode(
-#             x=alt.X("repetition:O", title="Repetition"),
-#             y=alt.Y(
-#                 "mean_esr:Q",
-#                 title="Mean ESR / Ohm",
-#                 scale=alt.Scale(domain=_esr_domain),
-#             ),
-#             xOffset="flow_rate:O",
-#             tooltip=[
-#                 "study_phase:N",
-#                 "flow_rate:O",
-#                 alt.Tooltip("mean_esr:Q", format=".4f"),
-#                 alt.Tooltip("std_esr:Q", format=".4f"),
-#                 "cycles:Q",
-#             ],
-#         )
-#     )
-
-#     series_resistance_per_repetition_plot = (
-#         alt.layer(_boxplot, _mean)
-#         .resolve_scale(y="shared")
-#         .resolve_axis(y="shared")
-#         .properties(
-#             title=alt.TitleParams(
-#                 text="Figure 3. ESR per repetition",
-#                 subtitle="ESR values for each repetition across selected participants.",
-#                 anchor="start",
-#                 orient="top",
-#                 offset=20,
-#             ),
-#             width=325,
-#         )
-#         .configure_axisX(labelAngle=0)
-#     )
-#     return (series_resistance_per_repetition_plot,)
+    series_resistance_per_participant_plot = (
+        alt.layer(_bars, _errs)
+        .properties(
+            title=alt.TitleParams(
+                text="Figure 2. ESR per participant",
+                subtitle="ESR values for each participant across selected repetitions.",
+                anchor="start",
+                orient="top",
+                offset=20,
+            ),
+            width=325,
+        )
+        .configure_axisX(
+            labelAngle=-45
+        )
+    )
+    return (series_resistance_per_participant_plot,)
 
 
-# @app.cell
-# def section_impedance_spectroscopy(
-#     eis_filtered_df,
-#     nyquist_plots,
-#     series_resistance_per_participant_plot,
-#     series_resistance_per_repetition_plot,
-# ):
-#     # IMPEDANCE SPECTROSCOPY EVALUATION
-#     # STEP 4: Display the content of the section and explain what it does
+@app.cell
+def esr_per_repetition(series_resistance_df):
+    # IMPEDANCE SPECTROSCOPY EVALUATION
+    # STEP 3c: Plot series resistance values over repetition (mean value over participants)
+    #          with error bars representing the standard deviation of the mean)
 
-#     # display section content
-#     mo.vstack(
-#         [
-#             mo.md("## Impedance Spectroscopy"),
-#             mo.md("""
-#                 This section allows you to visualize the results of the Impedance Spectroscopy experiments. You can select one or more files containing the EIS data, and the notebook will generate Nyquist plots, extract ohmic series resistances for each selected file, and compare different repetitions and runs.
-#             """),
-#             mo.md("<br>"),
-#             mo.md("### Raw data exploration"),
-#             mo.md("""
-#                 The expandable sections enables you to explore the raw EIS data of all selected datasets in more detail. You can view the data in a tabular format and apply filter and computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
-#             """),
-#             mo.accordion(
-#                 {
-#                     "Data table": mo.ui.dataframe(eis_filtered_df),
-#                     "Data explorer": mo.ui.data_explorer(eis_filtered_df),
-#                 },
-#                 lazy=True,
-#                 multiple=True,
-#             ),
-#             mo.md("<br>"),
-#             mo.md("### Nyquist plots"),
-#             mo.md("""
-#                 These Nyquist plots show the relationship between the real and imaginary parts of the impedance grouped by participant. Each point on the plot corresponds to a specific frequency, and the shape of the plot can provide insights into the electrochemical processes occurring in the system.
-#             """),
-#             mo.md("<br>"),
-#             nyquist_plots,
-#             mo.md("<br>"),
-#             mo.md("### Ohmic series resistance (ESR) comparison"),
-#             mo.md("""
-#                 These plots compare the extracted ohmic series resistance (ESR) values across participants and repetitions. To keep it simple, the ESR was not fitted via a Randles circuit but simply estimated from the intercept of the Nyquist plots with the Re(Z)-axis. The first plot shows the mean ESR values for each participant with error bars representing the standard deviation across repetitions. The second plot shows the mean ESR values for each repetition with error bars representing the standard deviation across participants. You can use these plots to identify trends or differences in ESR values between participants and repetitions.
-#             """),
-#             mo.md("<br>"),
-#             mo.hstack(
-#                 [
-#                     series_resistance_per_participant_plot,
-#                     series_resistance_per_repetition_plot,
-#                 ],
-#                 widths="equal",
-#                 gap=0,
-#             ),
-#             mo.md("<br>"),
-#         ]
-#     )
-#     return
+    # create a bar chart to compare the ESR values across participants and repetitions
+    series_resistance_per_repetition = series_resistance_df.group_by(
+        "study_phase",
+        "repetition",
+        "flow_rate",
+    ).agg(
+        pl.col("ESR/Ohm").mean().alias("mean_esr"),
+        pl.col("ESR/Ohm").std().alias("std_esr"),
+        pl.len().alias("cycles"),
+    ).sort(["study_phase", "repetition", "flow_rate"])
+
+    # build domains for the ESR values
+    _all_esr = series_resistance_df["ESR/Ohm"]
+    _all_mean_esr = series_resistance_per_repetition["mean_esr"]
+    _esr_domain = [_all_esr.min() / 1.1, _all_esr.max() * 1.1]
+    _mean_esr_domain = [_all_mean_esr.min() / 1.1, _all_mean_esr.max() * 1.1]
+
+    # construct a box plot
+    _boxplot = (
+        alt.Chart(
+            series_resistance_df,
+        )
+        .mark_boxplot(
+            size=25,
+            ticks={"size": 10},
+            median={"color": "black", "thickness": 2},
+            outliers={"size": 15, "shape": "circle"},
+        )
+        .encode(
+            x=alt.X("repetition:O", title="Repetition"),
+            y=alt.Y(
+                "ESR/Ohm:Q", title="ESR / Ohm", scale=alt.Scale(domain=_esr_domain)
+            ),
+            xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
+            color=alt.Color("repetition:O", title="Repetition"),
+            opacity=alt.Opacity("flow_rate:O", title="Flow Rate", scale=alt.Scale(range=[1, 0.33])),
+        )
+    )
+
+    _mean = (
+        alt.Chart(series_resistance_per_repetition)
+        .mark_point(
+            color="black",
+            opacity=0.75,
+            shape="circle",
+            size=50,
+        )
+        .encode(
+            x=alt.X("repetition:O", title="Repetition"),
+            y=alt.Y(
+                "mean_esr:Q",
+                title="Mean ESR / Ohm",
+                scale=alt.Scale(domain=_esr_domain),
+            ),
+            xOffset="flow_rate:O",
+            tooltip=[
+                "study_phase:N",
+                "flow_rate:O",
+                alt.Tooltip("mean_esr:Q", format=".4f"),
+                alt.Tooltip("std_esr:Q", format=".4f"),
+                "cycles:Q",
+            ],
+        )
+    )
+
+    series_resistance_per_repetition_plot = (
+        alt.layer(_boxplot, _mean)
+        .resolve_scale(y="shared")
+        .resolve_axis(y="shared")
+        .properties(
+            title=alt.TitleParams(
+                text="Figure 3. ESR per repetition",
+                subtitle="ESR values for each repetition across selected participants.",
+                anchor="start",
+                orient="top",
+                offset=20,
+            ),
+            width=325,
+        )
+        .configure_axisX(labelAngle=0)
+    )
+    return (series_resistance_per_repetition_plot,)
+
+
+@app.cell
+def section_impedance_spectroscopy(
+    eis_filtered_df,
+    nyquist_plots,
+    series_resistance_per_participant_plot,
+    series_resistance_per_repetition_plot,
+):
+    # IMPEDANCE SPECTROSCOPY EVALUATION
+    # STEP 4: Display the content of the section and explain what it does
+
+    # display section content
+    mo.vstack(
+        [
+            mo.md("## Impedance Spectroscopy"),
+            mo.md("""
+                This section allows you to visualize the results of the Impedance Spectroscopy experiments. You can select one or more files containing the EIS data, and the notebook will generate Nyquist plots, extract ohmic series resistances for each selected file, and compare different repetitions and runs.
+            """),
+            mo.md("<br>"),
+            mo.md("### Raw data exploration"),
+            mo.md("""
+                The expandable sections enables you to explore the raw EIS data of all selected datasets in more detail. You can view the data in a tabular format and apply filter and computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
+            """),
+            mo.accordion(
+                {
+                    "Data table": mo.ui.dataframe(eis_filtered_df),
+                    "Data explorer": mo.ui.data_explorer(eis_filtered_df),
+                },
+                lazy=True,
+                multiple=True,
+            ),
+            mo.md("<br>"),
+            mo.md("### Nyquist plots"),
+            mo.md("""
+                These Nyquist plots show the relationship between the real and imaginary parts of the impedance grouped by participant. Each point on the plot corresponds to a specific frequency, and the shape of the plot can provide insights into the electrochemical processes occurring in the system.
+            """),
+            mo.md("<br>"),
+            nyquist_plots,
+            mo.md("<br>"),
+            mo.md("### Ohmic series resistance (ESR) comparison"),
+            mo.md("""
+                These plots compare the extracted ohmic series resistance (ESR) values across participants and repetitions. To keep it simple, the ESR was not fitted via a Randles circuit but simply estimated from the intercept of the Nyquist plots with the Re(Z)-axis. The first plot shows the mean ESR values for each participant with error bars representing the standard deviation across repetitions. The second plot shows the mean ESR values for each repetition with error bars representing the standard deviation across participants. You can use these plots to identify trends or differences in ESR values between participants and repetitions.
+            """),
+            mo.md("<br>"),
+            mo.hstack(
+                [
+                    series_resistance_per_participant_plot,
+                    series_resistance_per_repetition_plot,
+                ],
+                widths="equal",
+                gap=0,
+            ),
+            mo.md("<br>"),
+        ]
+    )
+    return
 
 
 @app.cell
