@@ -5,7 +5,7 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "marimo[recommended]>=0.20.1",
-#     "polars>=0.19.0",
+#     "polars>=1.38.1",
 #     "scipy>=1.11.0",
 #     "numpy>=1.24.0",
 #     "altair>=5.0.0",
