@@ -1822,758 +1822,758 @@ def _(
     return (cd_cycling_filtered_df,)
 
 
-# @app.cell
-# def _(cd_cycling_filtered_df):
-#     # CHARGE-DISCHARGE CYCLING EVALUATION
-#     # STEP 2a: Prepare dataframes for the voltage-capacity as well as voltage-dQ/dV curves from the charge-discharge cycling data
+@app.cell
+def _(cd_cycling_filtered_df):
+    # CHARGE-DISCHARGE CYCLING EVALUATION
+    # STEP 2a: Prepare dataframes for the voltage-capacity as well as voltage-dQ/dV curves from the charge-discharge cycling data
 
-#     # compute derived columns using .over() to keep per-file semantics
-#     _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
-#     # Step 1: compute diff-based columns within each file group
-#     _cd_with_diffs = cd_cycling_filtered_df.with_columns(
-#         pl.col("time/s").diff().over(_meta_cols).alias("dt/s"),
-#         pl.col("Q charge/discharge/mA.h").alias("capacity/mAh"),
-#         (
-#             pl.col("Q charge/discharge/mA.h").diff().over(_meta_cols)
-#             / pl.col("voltage/V").diff().over(_meta_cols)
-#         ).alias("_dQ_dV_raw"),
-#     )
-#     # Step 2: smooth dQ/dV with rolling median within each file group
-#     df_filtered_cd_cycling_data = _cd_with_diffs.with_columns(
-#         pl.col("_dQ_dV_raw").rolling_median(25).over(_meta_cols).alias("dQ/dV"),
-#     ).select(
-#         [
-#             *_meta_cols,
-#             "half cycle",
-#             "time/s",
-#             "voltage/V",
-#             "current/mA",
-#             "capacity/mAh",
-#             "dQ/dV",
-#         ]
-#     )
+    # compute derived columns using .over() to keep per-file semantics
+    _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
+    # Step 1: compute diff-based columns within each file group
+    _cd_with_diffs = cd_cycling_filtered_df.with_columns(
+        pl.col("time/s").diff().over(_meta_cols).alias("dt/s"),
+        pl.col("Q charge/discharge/mA.h").alias("capacity/mAh"),
+        (
+            pl.col("Q charge/discharge/mA.h").diff().over(_meta_cols)
+            / pl.col("voltage/V").diff().over(_meta_cols)
+        ).alias("_dQ_dV_raw"),
+    )
+    # Step 2: smooth dQ/dV with rolling median within each file group
+    df_filtered_cd_cycling_data = _cd_with_diffs.with_columns(
+        pl.col("_dQ_dV_raw").rolling_median(25).over(_meta_cols).alias("dQ/dV"),
+    ).select(
+        [
+            *_meta_cols,
+            "half cycle",
+            "time/s",
+            "voltage/V",
+            "current/mA",
+            "capacity/mAh",
+            "dQ/dV",
+        ]
+    )
 
-#     # downsample the data for better performance in the plot
-#     df_filtered_cd_cycling_chart_data = (
-#         df_filtered_cd_cycling_data.sort(
-#             [
-#                 *_meta_cols,
-#                 "half cycle",
-#                 "time/s",
-#             ]
-#         )
-#         .with_columns(
-#             pl.int_range(0, pl.len()).over([*_meta_cols, "half cycle"]).alias("_i")
-#         )
-#         .filter((pl.col("_i") % 10) == 0)
-#         .drop("_i")
-#     )
+    # downsample the data for better performance in the plot
+    df_filtered_cd_cycling_chart_data = (
+        df_filtered_cd_cycling_data.sort(
+            [
+                *_meta_cols,
+                "half cycle",
+                "time/s",
+            ]
+        )
+        .with_columns(
+            pl.int_range(0, pl.len()).over([*_meta_cols, "half cycle"]).alias("_i")
+        )
+        .filter((pl.col("_i") % 10) == 0)
+        .drop("_i")
+    )
 
-#     # create a ui slider to chose the half-cycle to display
-#     # (removed stray mo.ui.slider(start=1, stop=10, step=1))
-#     slider_half_cycle = mo.ui.slider(
-#         label="",
-#         start=int(df_filtered_cd_cycling_chart_data["half cycle"].min() / 2),
-#         stop=int(df_filtered_cd_cycling_chart_data["half cycle"].max() / 2),
-#         step=1,
-#         full_width=True,
-#         show_value=True,
-#     )
-#     return (
-#         df_filtered_cd_cycling_chart_data,
-#         df_filtered_cd_cycling_data,
-#         slider_half_cycle,
-#     )
-
-
-# @app.cell
-# def _(
-#     df_filtered_cd_cycling_chart_data,
-#     df_filtered_cd_cycling_data,
-#     slider_half_cycle,
-#     wheel_zoom_x,
-#     wheel_zoom_xy,
-#     wheel_zoom_y,
-# ):
-#     # CHARGE-DISCHARGE CYCLING EVALUATION
-#     # STEP 2b: Build the voltage-time as well as voltage-dQ/dV curves for the charge-discharge cycling data
-
-#     # create selectors and bind them to the legend
-#     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
-#     _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
-
-#     _cd_cycling_capacity_voltage_data = df_filtered_cd_cycling_chart_data.filter(
-#         (pl.col("half cycle") == slider_half_cycle.value)
-#         | (pl.col("half cycle") == slider_half_cycle.value + 1)
-#     ).with_columns(
-#         pl.col("capacity/mAh").abs().alias("capacity/mAh"),
-#     )
-
-#     # compute per-axis data ranges, then build domains with some padding
-#     _all_voltage = _cd_cycling_capacity_voltage_data["voltage/V"]
-#     _voltage_domain = [_all_voltage.min(), _all_voltage.max()]
-#     _dqdv_domain = [0, df_filtered_cd_cycling_data["dQ/dV"].max()]
-
-#     # build a plot of voltage vs. capacity for the selected cycle
-#     cd_cycling_capacity_voltage = (
-#         alt.Chart(
-#             _cd_cycling_capacity_voltage_data
-#         )
-#         .mark_point()
-#         .encode(
-#             x=alt.X("capacity/mAh:Q", title="Capacity / mAh"),
-#             y=alt.Y(
-#                 "voltage/V:Q",
-#                 title="Voltage / V",
-#                 scale=alt.Scale(domain=_voltage_domain),
-#             ),
-#             color=alt.Color("participant:N", title="Participant"),
-#             shape=alt.Shape("repetition:N", title="Repetition"),
-#             opacity=alt.condition(
-#                 _participant_selection & _repetition_selection,
-#                 alt.value(1.0),
-#                 alt.value(0.0),
-#             ),
-#             tooltip=[
-#                 "participant:N",
-#                 "repetition:O",
-#                 "flow_rate:Q",
-#                 alt.Tooltip("capacity/mAh:Q", format=".1f"),
-#                 alt.Tooltip("voltage/V:Q", format=".4f"),
-#             ],
-#         )
-#         .properties(width=720)
-#     )
-
-#     # build a plot of dQ/dV vs. voltage for the selected cycle
-#     cd_cycling_dqdv_charts = (
-#         alt.Chart(
-#             df_filtered_cd_cycling_data.sort(
-#                 [
-#                     "study_phase",
-#                     "participant",
-#                     "repetition",
-#                     "flow_rate",
-#                     "half cycle",
-#                     "time/s",
-#                 ]
-#             ).filter(
-#                 (pl.col("half cycle") == slider_half_cycle.value)
-#                 | (pl.col("half cycle") == slider_half_cycle.value + 1)
-#             )
-#         )
-#         .mark_bar(
-#             orient="horizontal",
-#         )
-#         .encode(
-#             x=alt.X(
-#                 "dQ/dV:Q", title="dQ/dV / mAh/V", scale=alt.Scale(domain=_dqdv_domain)
-#             ),
-#             y=alt.Y(
-#                 "voltage/V:Q",
-#                 title="",
-#                 scale=alt.Scale(domain=_voltage_domain),
-#                 axis=alt.Axis(title=None, labels=False, ticks=False),
-#             ),
-#             color=alt.Color("participant:N", title="Participant"),
-#             opacity=alt.condition(
-#                 _participant_selection & _repetition_selection,
-#                 alt.value(1.0),
-#                 alt.value(0.0),
-#             ),
-#             tooltip=[
-#                 "participant:N",
-#                 "repetition:O",
-#                 "flow_rate:Q",
-#                 alt.Tooltip("dQ/dV:Q", format=".2f"),
-#                 alt.Tooltip("voltage/V:Q", format=".4f"),
-#             ],
-#         )
-#         .properties(
-#             width=170,
-#         )
-#     )
-
-#     cd_cycling_charts = (
-#         alt.hconcat(cd_cycling_capacity_voltage, cd_cycling_dqdv_charts)
-#         .resolve_legend(color="shared")
-#         .properties(
-#             title=alt.TitleParams(
-#                 text="Figure 8. Charge-discharge cycling data",
-#                 subtitle="Voltage-capacity curves and dQ/dV plots for the selected cycle.",
-#                 anchor="start",
-#                 orient="top",
-#                 offset=20,
-#             ),
-#         )
-#         .interactive()
-#         .add_params(_participant_selection, _repetition_selection)
-#         .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
-#     )
-#     return (cd_cycling_charts,)
+    # create a ui slider to chose the half-cycle to display
+    # (removed stray mo.ui.slider(start=1, stop=10, step=1))
+    slider_half_cycle = mo.ui.slider(
+        label="",
+        start=int(df_filtered_cd_cycling_chart_data["half cycle"].min() / 2),
+        stop=int(df_filtered_cd_cycling_chart_data["half cycle"].max() / 2),
+        step=1,
+        full_width=True,
+        show_value=True,
+    )
+    return (
+        df_filtered_cd_cycling_chart_data,
+        df_filtered_cd_cycling_data,
+        slider_half_cycle,
+    )
 
 
-# @app.cell
-# def _(df_filtered_cd_cycling_data, get_linregress_params):
-#     # CHARGE-DISCHARGE CYCLING EVALUATION
-#     # STEP 3a: Aggregate the capacity data for each cycle as charge and discharge capacity and compute the coulombic efficiency
+@app.cell
+def _(
+    df_filtered_cd_cycling_chart_data,
+    df_filtered_cd_cycling_data,
+    slider_half_cycle,
+    wheel_zoom_x,
+    wheel_zoom_xy,
+    wheel_zoom_y,
+):
+    # CHARGE-DISCHARGE CYCLING EVALUATION
+    # STEP 2b: Build the voltage-time as well as voltage-dQ/dV curves for the charge-discharge cycling data
 
-#     # filter out each half-cycle's end capacity
-#     cd_cycling_filtered_cycle_data = (
-#         df_filtered_cd_cycling_data.group_by(
-#             "study_phase",
-#             "participant",
-#             "repetition",
-#             "flow_rate",
-#             "half cycle",
-#         )
-#         .agg(
-#             (pl.col("time/s") / 3600).last().alias("time/h"),
-#             pl.col("capacity/mAh").last().alias("capacity/mAh"),
-#         )
-#         .sort(["study_phase", "participant", "repetition", "flow_rate", "half cycle"])
-#     )
+    # create selectors and bind them to the legend
+    _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
+    _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
 
-#     # separate capacity values for charge and discharge steps by filtering positive (charge) and negative (discharge) capacity values
-#     cd_cycling_filtered_cycle_data = (
-#         cd_cycling_filtered_cycle_data.with_columns(
-#             pl.when(pl.col("capacity/mAh") > 0)
-#             .then(pl.col("capacity/mAh"))
-#             .otherwise(None)
-#             .alias("charge_capacity/mAh"),
-#             pl.when(pl.col("capacity/mAh") < 0)
-#             .then(pl.col("capacity/mAh").abs())
-#             .otherwise(None)
-#             .alias("discharge_capacity/mAh"),
-#         )
-#         .drop("capacity/mAh")
-#         .group_by(
-#             "study_phase",
-#             "participant",
-#             "repetition",
-#             "flow_rate",
-#             (pl.col("half cycle") // 2).alias("cycle"),
-#         )
-#         .agg(
-#             pl.col("time/h").last().alias("time/h"),
-#             pl.col("charge_capacity/mAh").first().alias("charge_capacity/mAh"),
-#             pl.col("discharge_capacity/mAh").last().alias("discharge_capacity/mAh"),
-#         )
-#         .sort(["study_phase", "participant", "repetition", "flow_rate", "cycle"])
-#     )
+    _cd_cycling_capacity_voltage_data = df_filtered_cd_cycling_chart_data.filter(
+        (pl.col("half cycle") == slider_half_cycle.value)
+        | (pl.col("half cycle") == slider_half_cycle.value + 1)
+    ).with_columns(
+        pl.col("capacity/mAh").abs().alias("capacity/mAh"),
+    )
 
-#     # calculate coulombic efficiency for each cycle
-#     cd_cycling_filtered_cycle_data = cd_cycling_filtered_cycle_data.with_columns(
-#         (pl.col("discharge_capacity/mAh") / pl.col("charge_capacity/mAh") * 100).alias(
-#             "coulombic_efficiency/%"
-#         ),
-#     ).sort(["study_phase", "participant", "repetition", "flow_rate", "cycle"])
+    # compute per-axis data ranges, then build domains with some padding
+    _all_voltage = _cd_cycling_capacity_voltage_data["voltage/V"]
+    _voltage_domain = [_all_voltage.min(), _all_voltage.max()]
+    _dqdv_domain = [0, df_filtered_cd_cycling_data["dQ/dV"].max()]
 
-#     # drop all cycles with:
-#     # - undefined coulombic efficiency
-#     # - coulombic efficiency smaller than 60% greater than 140%
-#     cd_cycling_filtered_cycle_data = cd_cycling_filtered_cycle_data.drop_nans(
-#         "coulombic_efficiency/%"
-#     ).filter(
-#         (pl.col("coulombic_efficiency/%") > 60)
-#         & (pl.col("coulombic_efficiency/%") < 140)
-#     )
+    # build a plot of voltage vs. capacity for the selected cycle
+    cd_cycling_capacity_voltage = (
+        alt.Chart(
+            _cd_cycling_capacity_voltage_data
+        )
+        .mark_point()
+        .encode(
+            x=alt.X("capacity/mAh:Q", title="Capacity / mAh"),
+            y=alt.Y(
+                "voltage/V:Q",
+                title="Voltage / V",
+                scale=alt.Scale(domain=_voltage_domain),
+            ),
+            color=alt.Color("participant:N", title="Participant"),
+            shape=alt.Shape("repetition:N", title="Repetition"),
+            opacity=alt.condition(
+                _participant_selection & _repetition_selection,
+                alt.value(1.0),
+                alt.value(0.0),
+            ),
+            tooltip=[
+                "participant:N",
+                "repetition:O",
+                "flow_rate:Q",
+                alt.Tooltip("capacity/mAh:Q", format=".1f"),
+                alt.Tooltip("voltage/V:Q", format=".4f"),
+            ],
+        )
+        .properties(width=720)
+    )
 
-#     # calculate capacity retention relative to the initial discharge capacity for each group
-#     cd_cycling_filtered_cycle_data = cd_cycling_filtered_cycle_data.with_columns(
-#         (
-#             pl.col("discharge_capacity/mAh")
-#             / pl.col("discharge_capacity/mAh")
-#             .first()
-#             .over(
-#                 "study_phase",
-#                 "participant",
-#                 "repetition",
-#                 "flow_rate",
-#             )
-#             * 100
-#         ).alias("capacity_retention/%")
-#     ).sort(["study_phase", "participant", "repetition", "flow_rate", "cycle"])
+    # build a plot of dQ/dV vs. voltage for the selected cycle
+    cd_cycling_dqdv_charts = (
+        alt.Chart(
+            df_filtered_cd_cycling_data.sort(
+                [
+                    "study_phase",
+                    "participant",
+                    "repetition",
+                    "flow_rate",
+                    "half cycle",
+                    "time/s",
+                ]
+            ).filter(
+                (pl.col("half cycle") == slider_half_cycle.value)
+                | (pl.col("half cycle") == slider_half_cycle.value + 1)
+            )
+        )
+        .mark_bar(
+            orient="horizontal",
+        )
+        .encode(
+            x=alt.X(
+                "dQ/dV:Q", title="dQ/dV / mAh/V", scale=alt.Scale(domain=_dqdv_domain)
+            ),
+            y=alt.Y(
+                "voltage/V:Q",
+                title="",
+                scale=alt.Scale(domain=_voltage_domain),
+                axis=alt.Axis(title=None, labels=False, ticks=False),
+            ),
+            color=alt.Color("participant:N", title="Participant"),
+            opacity=alt.condition(
+                _participant_selection & _repetition_selection,
+                alt.value(1.0),
+                alt.value(0.0),
+            ),
+            tooltip=[
+                "participant:N",
+                "repetition:O",
+                "flow_rate:Q",
+                alt.Tooltip("dQ/dV:Q", format=".2f"),
+                alt.Tooltip("voltage/V:Q", format=".4f"),
+            ],
+        )
+        .properties(
+            width=170,
+        )
+    )
 
-#     # get the initial discharge capacity for each group
-#     cd_cycling_initial_discharge_capacity = cd_cycling_filtered_cycle_data.group_by(
-#         "study_phase",
-#         "participant",
-#         "repetition",
-#         "flow_rate",
-#     ).agg(
-#         pl.col("discharge_capacity/mAh").first().alias("capacity/mAh"),
-#     )
-
-#     # compute the capacity fade relative to the initial discharge capacity for each group by performing a group mapping of get_linregress_params over the capacity-time data and extracting the slope of the linear regression as capacity fade rate
-#     cd_cycling_filtered_capacity_fade_time = (
-#         cd_cycling_filtered_cycle_data.group_by(
-#             "study_phase",
-#             "participant",
-#             "repetition",
-#             "flow_rate",
-#         )
-#         .map_groups(
-#             lambda df: get_linregress_params(
-#                 df=df,
-#                 x_name="time/h",
-#                 y_name="capacity_retention/%",
-#                 with_columns=[
-#                     "study_phase",
-#                     "participant",
-#                     "repetition",
-#                     "flow_rate",
-#                     "time/h",
-#                     "cycle",
-#                     "capacity_retention/%",
-#                 ],
-#             )
-#         )
-#         .sort(
-#             ["study_phase", "participant", "repetition", "flow_rate", "time/h", "cycle"]
-#         )
-#         .with_columns(
-#             (pl.col("slope") * 24).alias("capacity_fade_rate/%/d"),
-#         )
-#         .select(
-#             [
-#                 "study_phase",
-#                 "participant",
-#                 "repetition",
-#                 "flow_rate",
-#                 "capacity_fade_rate/%/d",
-#             ]
-#         )
-#         .sort(["study_phase", "participant", "repetition", "flow_rate"])
-#     )
-
-#     # compute the capacity fade relative to the initial discharge capacity for each group by performing a group mapping of get_linregress_params over the capacity-cycle data and extracting the slope of the linear regression as capacity fade rate
-#     cd_cycling_filtered_capacity_fade_cycle = (
-#         cd_cycling_filtered_cycle_data.group_by(
-#             "study_phase",
-#             "participant",
-#             "repetition",
-#             "flow_rate",
-#         )
-#         .map_groups(
-#             lambda df: get_linregress_params(
-#                 df=df,
-#                 x_name="cycle",
-#                 y_name="capacity_retention/%",
-#                 with_columns=[
-#                     "study_phase",
-#                     "participant",
-#                     "repetition",
-#                     "flow_rate",
-#                     "time/h",
-#                     "cycle",
-#                     "capacity_retention/%",
-#                 ],
-#             )
-#         )
-#         .sort(
-#             ["study_phase", "participant", "repetition", "flow_rate", "time/h", "cycle"]
-#         )
-#         .with_columns(
-#             (pl.col("slope")).alias("capacity_fade_rate/cycle"),
-#         )
-#         .select(
-#             [
-#                 "study_phase",
-#                 "participant",
-#                 "repetition",
-#                 "flow_rate",
-#                 "capacity_fade_rate/cycle",
-#             ]
-#         )
-#         .sort(["study_phase", "participant", "repetition", "flow_rate"])
-#     )
-#     return (
-#         cd_cycling_filtered_capacity_fade_cycle,
-#         cd_cycling_filtered_capacity_fade_time,
-#         cd_cycling_filtered_cycle_data,
-#         cd_cycling_initial_discharge_capacity,
-#     )
+    cd_cycling_charts = (
+        alt.hconcat(cd_cycling_capacity_voltage, cd_cycling_dqdv_charts)
+        .resolve_legend(color="shared")
+        .properties(
+            title=alt.TitleParams(
+                text="Figure 8. Charge-discharge cycling data",
+                subtitle="Voltage-capacity curves and dQ/dV plots for the selected cycle.",
+                anchor="start",
+                orient="top",
+                offset=20,
+            ),
+        )
+        .interactive()
+        .add_params(_participant_selection, _repetition_selection)
+        .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
+    )
+    return (cd_cycling_charts,)
 
 
-# @app.cell
-# def _(
-#     cd_cycling_filtered_capacity_fade_cycle,
-#     cd_cycling_filtered_cycle_data,
-#     wheel_zoom_x,
-#     wheel_zoom_xy,
-#     wheel_zoom_y,
-# ):
-#     # CHARGE-DISCHARGE CYCLING EVALUATION
-#     # STEP 3b: Build the capacity-cycle curves for the charge-discharge cycling data
+@app.cell
+def _(df_filtered_cd_cycling_data, get_linregress_params):
+    # CHARGE-DISCHARGE CYCLING EVALUATION
+    # STEP 3a: Aggregate the capacity data for each cycle as charge and discharge capacity and compute the coulombic efficiency
 
-#     # create selectors and bind them to the legend
-#     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
-#     _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
+    # filter out each half-cycle's end capacity
+    cd_cycling_filtered_cycle_data = (
+        df_filtered_cd_cycling_data.group_by(
+            "study_phase",
+            "participant",
+            "repetition",
+            "flow_rate",
+            "half cycle",
+        )
+        .agg(
+            (pl.col("time/s") / 3600).last().alias("time/h"),
+            pl.col("capacity/mAh").last().alias("capacity/mAh"),
+        )
+        .sort(["study_phase", "participant", "repetition", "flow_rate", "half cycle"])
+    )
 
-#     # build domains for the capacity retention values and time values
-#     _all_capacity_retention = cd_cycling_filtered_cycle_data["capacity_retention/%"]
-#     _capacity_retention_domain = [
-#         _all_capacity_retention.min() / 1.02,
-#         _all_capacity_retention.max() * 1.02,
-#     ]
+    # separate capacity values for charge and discharge steps by filtering positive (charge) and negative (discharge) capacity values
+    cd_cycling_filtered_cycle_data = (
+        cd_cycling_filtered_cycle_data.with_columns(
+            pl.when(pl.col("capacity/mAh") > 0)
+            .then(pl.col("capacity/mAh"))
+            .otherwise(None)
+            .alias("charge_capacity/mAh"),
+            pl.when(pl.col("capacity/mAh") < 0)
+            .then(pl.col("capacity/mAh").abs())
+            .otherwise(None)
+            .alias("discharge_capacity/mAh"),
+        )
+        .drop("capacity/mAh")
+        .group_by(
+            "study_phase",
+            "participant",
+            "repetition",
+            "flow_rate",
+            (pl.col("half cycle") // 2).alias("cycle"),
+        )
+        .agg(
+            pl.col("time/h").last().alias("time/h"),
+            pl.col("charge_capacity/mAh").first().alias("charge_capacity/mAh"),
+            pl.col("discharge_capacity/mAh").last().alias("discharge_capacity/mAh"),
+        )
+        .sort(["study_phase", "participant", "repetition", "flow_rate", "cycle"])
+    )
 
-#     _capacity_cycle_chart = (
-#         alt.Chart(cd_cycling_filtered_cycle_data)
-#         .mark_point()
-#         .encode(
-#             x=alt.X("cycle:Q", title="Cycle"),
-#             y=alt.Y(
-#                 "capacity_retention/%",
-#                 title="(Discharge) Capacity Retention / %",
-#                 scale=alt.Scale(domain=_capacity_retention_domain),
-#             ),
-#             color=alt.Color("participant:N", title="Participant"),
-#             shape=alt.Shape("repetition:N", title="Repetition"),
-#             opacity=alt.condition(
-#                 _participant_selection & _repetition_selection,
-#                 alt.value(1.0),
-#                 alt.value(0.0),
-#             ),
-#             tooltip=[
-#                 "participant:N",
-#                 "repetition:O",
-#                 "flow_rate:Q",
-#                 alt.Tooltip("cycle:Q", format=".0f"),
-#                 alt.Tooltip("charge_capacity/mAh:Q", format=".1f"),
-#                 alt.Tooltip("discharge_capacity/mAh:Q", format=".1f"),
-#             ],
-#         )
-#         .properties(
-#             width=720,
-#             height=300,
-#         )
-#     )
+    # calculate coulombic efficiency for each cycle
+    cd_cycling_filtered_cycle_data = cd_cycling_filtered_cycle_data.with_columns(
+        (pl.col("discharge_capacity/mAh") / pl.col("charge_capacity/mAh") * 100).alias(
+            "coulombic_efficiency/%"
+        ),
+    ).sort(["study_phase", "participant", "repetition", "flow_rate", "cycle"])
 
-#     # CHARGE-DISCHARGE CYCLING EVALUATION
-#     # STEP 3c: Build bar chart for cycle-based capacity fade rates per participant and repetition
-#     _capacity_fade_cycle_chart = (
-#         alt.Chart(cd_cycling_filtered_capacity_fade_cycle)
-#         .mark_bar()
-#         .encode(
-#             x=alt.X(
-#                 "capacity_fade_rate/cycle:Q", title="Capacity fade rate / % cycle⁻¹"
-#             ),
-#             y=alt.Y(
-#                 "participant:N", axis=alt.Axis(title=None, labels=False, ticks=False)
-#             ),
-#             yOffset=alt.YOffset("repetition:O", title="Repetition"),
-#             color=alt.Color("participant:N", title="Participant"),
-#             opacity=alt.Opacity("repetition:O", title="Repetition", scale=alt.Scale(range=[1, 0.33])),
-#             tooltip=[
-#                 "study_phase:O",
-#                 "participant:N",
-#                 "repetition:O",
-#                 "flow_rate:Q",
-#                 alt.Tooltip("capacity_fade_rate/cycle:Q", format=".4f"),
-#             ],
-#         )
-#         .properties(
-#             width=170,
-#             height=300,
-#         )
-#     )
+    # drop all cycles with:
+    # - undefined coulombic efficiency
+    # - coulombic efficiency smaller than 60% greater than 140%
+    cd_cycling_filtered_cycle_data = cd_cycling_filtered_cycle_data.drop_nans(
+        "coulombic_efficiency/%"
+    ).filter(
+        (pl.col("coulombic_efficiency/%") > 60)
+        & (pl.col("coulombic_efficiency/%") < 140)
+    )
 
-#     # build the final chart by concatenating the capacity-time and capacity fade rate charts and resolving the legends
-#     cd_cycling_capacity_cycle_chart = (
-#         alt.hconcat(_capacity_cycle_chart, _capacity_fade_cycle_chart)
-#         .resolve_legend(color="shared")
-#         .properties(
-#             title=alt.TitleParams(
-#                 text="Figure 9. Capacity retention over cycle (left) and corresponding capacity fade rate (right).",
-#                 subtitle=[
-#                     "Data is shown for the selected participants and repetitions. Capacity fade rate was calculated as the slope of a linear regression over the (discharge) capacity retention vs. cycle data of",
-#                     "each repetition individually.",
-#                 ],
-#                 anchor="start",
-#                 orient="top",
-#                 offset=20,
-#             ),
-#         )
-#         .interactive()
-#         .add_params(_participant_selection, _repetition_selection)
-#         .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
-#     )
-#     return (cd_cycling_capacity_cycle_chart,)
+    # calculate capacity retention relative to the initial discharge capacity for each group
+    cd_cycling_filtered_cycle_data = cd_cycling_filtered_cycle_data.with_columns(
+        (
+            pl.col("discharge_capacity/mAh")
+            / pl.col("discharge_capacity/mAh")
+            .first()
+            .over(
+                "study_phase",
+                "participant",
+                "repetition",
+                "flow_rate",
+            )
+            * 100
+        ).alias("capacity_retention/%")
+    ).sort(["study_phase", "participant", "repetition", "flow_rate", "cycle"])
 
+    # get the initial discharge capacity for each group
+    cd_cycling_initial_discharge_capacity = cd_cycling_filtered_cycle_data.group_by(
+        "study_phase",
+        "participant",
+        "repetition",
+        "flow_rate",
+    ).agg(
+        pl.col("discharge_capacity/mAh").first().alias("capacity/mAh"),
+    )
 
-# @app.cell
-# def _(
-#     cd_cycling_filtered_capacity_fade_time,
-#     cd_cycling_filtered_cycle_data,
-#     wheel_zoom_x,
-#     wheel_zoom_xy,
-#     wheel_zoom_y,
-# ):
-#     # CHARGE-DISCHARGE CYCLING EVALUATION
-#     # STEP 3b: Build the capacity-time curves for the charge-discharge cycling data
+    # compute the capacity fade relative to the initial discharge capacity for each group by performing a group mapping of get_linregress_params over the capacity-time data and extracting the slope of the linear regression as capacity fade rate
+    cd_cycling_filtered_capacity_fade_time = (
+        cd_cycling_filtered_cycle_data.group_by(
+            "study_phase",
+            "participant",
+            "repetition",
+            "flow_rate",
+        )
+        .map_groups(
+            lambda df: get_linregress_params(
+                df=df,
+                x_name="time/h",
+                y_name="capacity_retention/%",
+                with_columns=[
+                    "study_phase",
+                    "participant",
+                    "repetition",
+                    "flow_rate",
+                    "time/h",
+                    "cycle",
+                    "capacity_retention/%",
+                ],
+            )
+        )
+        .sort(
+            ["study_phase", "participant", "repetition", "flow_rate", "time/h", "cycle"]
+        )
+        .with_columns(
+            (pl.col("slope") * 24).alias("capacity_fade_rate/%/d"),
+        )
+        .select(
+            [
+                "study_phase",
+                "participant",
+                "repetition",
+                "flow_rate",
+                "capacity_fade_rate/%/d",
+            ]
+        )
+        .sort(["study_phase", "participant", "repetition", "flow_rate"])
+    )
 
-#     # create selectors and bind them to the legend
-#     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
-#     _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
-
-#     # build domains for the capacity retention values and time values
-#     _all_capacity_retention = cd_cycling_filtered_cycle_data["capacity_retention/%"]
-#     _capacity_retention_domain = [
-#         _all_capacity_retention.min() / 1.02,
-#         _all_capacity_retention.max() * 1.02,
-#     ]
-
-#     # build a chart of capacity vs. time for the selected cycle
-#     _capacity_time_chart = (
-#         alt.Chart(cd_cycling_filtered_cycle_data)
-#         .mark_point()
-#         .encode(
-#             x=alt.X("time/h:Q", title="Time / h"),
-#             y=alt.Y(
-#                 "capacity_retention/%:Q",
-#                 title="(Discharge) Capacity Retention / %",
-#                 scale=alt.Scale(domain=_capacity_retention_domain),
-#             ),
-#             color=alt.Color("participant:N", title="Participant"),
-#             shape=alt.Shape("repetition:N", title="Repetition"),
-#             opacity=alt.condition(
-#                 _participant_selection & _repetition_selection,
-#                 alt.value(1.0),
-#                 alt.value(0.0),
-#             ),
-#             tooltip=[
-#                 "participant:N",
-#                 "repetition:O",
-#                 "flow_rate:Q",
-#                 "cycle:O",
-#                 alt.Tooltip("time/h:Q", format=".0f"),
-#                 alt.Tooltip("discharge_capacity/mAh:Q", format=".1f"),
-#             ],
-#         )
-#         .properties(
-#             width=720,
-#             height=300,
-#         )
-#     )
-
-#     # build a chart of capacity fade rate vs. time for the selected cycle
-#     _capacity_fade_time_chart = (
-#         alt.Chart(cd_cycling_filtered_capacity_fade_time)
-#         .mark_bar()
-#         .encode(
-#             x=alt.X("capacity_fade_rate/%/d:Q", title="Capacity fade rate / % d⁻¹"),
-#             y=alt.Y(
-#                 "participant:N", axis=alt.Axis(title=None, labels=False, ticks=False)
-#             ),
-#             yOffset=alt.YOffset("repetition:O", title="Repetition"),
-#             color=alt.Color("participant:N", title="Participant"),
-#             opacity=alt.Opacity("repetition:O", title="Repetition",scale=alt.Scale(range=[1, 0.33])),
-#             tooltip=[
-#                 "study_phase:N",
-#                 "participant:N",
-#                 "repetition:O",
-#                 "flow_rate:Q",
-#                 alt.Tooltip("capacity_fade_rate/%/d:Q", format=".4f"),
-#             ],
-#         )
-#         .properties(
-#             width=170,
-#             height=300,
-#         )
-#     )
-
-#     # build the final chart by concatenating the capacity-time and capacity fade rate charts and resolving the legends
-#     cd_cycling_capacity_time_chart = (
-#         alt.hconcat(_capacity_time_chart, _capacity_fade_time_chart)
-#         .resolve_legend(color="shared")
-#         .properties(
-#             title=alt.TitleParams(
-#                 text="Figure 10. Capacity retention over time (left) and corresponding capacity fade rate (right).",
-#                 subtitle=[
-#                     "Data is shown for the selected participants and repetitions. Capacity fade rate was calculated as the slope of a linear regression over the (discharge) capacity retention vs. time data of ",
-#                     "each repetition individually.",
-#                 ],
-#                 anchor="start",
-#                 orient="top",
-#                 offset=20,
-#             )
-#         )
-#         .interactive()
-#         .add_params(_participant_selection, _repetition_selection)
-#         .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
-#     )
-#     return (cd_cycling_capacity_time_chart,)
+    # compute the capacity fade relative to the initial discharge capacity for each group by performing a group mapping of get_linregress_params over the capacity-cycle data and extracting the slope of the linear regression as capacity fade rate
+    cd_cycling_filtered_capacity_fade_cycle = (
+        cd_cycling_filtered_cycle_data.group_by(
+            "study_phase",
+            "participant",
+            "repetition",
+            "flow_rate",
+        )
+        .map_groups(
+            lambda df: get_linregress_params(
+                df=df,
+                x_name="cycle",
+                y_name="capacity_retention/%",
+                with_columns=[
+                    "study_phase",
+                    "participant",
+                    "repetition",
+                    "flow_rate",
+                    "time/h",
+                    "cycle",
+                    "capacity_retention/%",
+                ],
+            )
+        )
+        .sort(
+            ["study_phase", "participant", "repetition", "flow_rate", "time/h", "cycle"]
+        )
+        .with_columns(
+            (pl.col("slope")).alias("capacity_fade_rate/cycle"),
+        )
+        .select(
+            [
+                "study_phase",
+                "participant",
+                "repetition",
+                "flow_rate",
+                "capacity_fade_rate/cycle",
+            ]
+        )
+        .sort(["study_phase", "participant", "repetition", "flow_rate"])
+    )
+    return (
+        cd_cycling_filtered_capacity_fade_cycle,
+        cd_cycling_filtered_capacity_fade_time,
+        cd_cycling_filtered_cycle_data,
+        cd_cycling_initial_discharge_capacity,
+    )
 
 
-# @app.cell
-# def _(cd_cycling_filtered_cycle_data):
-#     # CHARGE-DISCHARGE CYCLING EVALUATION
-#     # STEP 3b: Build boxplots from capacity data per participant to compare the capacity distributions between participants
+@app.cell
+def _(
+    cd_cycling_filtered_capacity_fade_cycle,
+    cd_cycling_filtered_cycle_data,
+    wheel_zoom_x,
+    wheel_zoom_xy,
+    wheel_zoom_y,
+):
+    # CHARGE-DISCHARGE CYCLING EVALUATION
+    # STEP 3b: Build the capacity-cycle curves for the charge-discharge cycling data
 
-#     # build domains for the capacity values
-#     _all_capacity = cd_cycling_filtered_cycle_data["discharge_capacity/mAh"].abs()
-#     _capacity_domain = [_all_capacity.min(), _all_capacity.max()]
+    # create selectors and bind them to the legend
+    _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
+    _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
 
-#     # construct a box plot
-#     cd_cycling_capacity_participant = (
-#         (
-#             alt.Chart(
-#                 cd_cycling_filtered_cycle_data,
-#             )
-#             .mark_boxplot(
-#                 size=50,
-#                 ticks={"size": 30},
-#                 median={"color": "black", "thickness": 2},
-#                 outliers={"size": 10, "shape": "circle"},
-#             )
-#             .encode(
-#                 x=alt.X("participant:N", title="Participant"),
-#                 y=alt.Y(
-#                     "discharge_capacity/mAh:Q",
-#                     title="(Discharge) Capacity / mAh",
-#                     scale=alt.Scale(domain=_capacity_domain),
-#                 ),
-#                 color=alt.Color("participant:N", title="Participant"),
-#                 # opacity=alt.condition(_legend_sel, alt.value(1.0), alt.value(0.05)),
-#             )
-#         )
-#         .properties(
-#             title=alt.TitleParams(
-#                 text="Figure 11. Capacity distribution per participant",
-#                 subtitle=[
-#                     "Boxplots showing the distribution of discharge capacity values for each participant",
-#                     "across all cycles and all repetitions.",
-#                 ],
-#                 anchor="start",
-#                 orient="top",
-#                 offset=20,
-#             ),
-#             width=325,
-#         )
-#         .configure_axisX(labelAngle=-45)
-#     )
-#     return (cd_cycling_capacity_participant,)
+    # build domains for the capacity retention values and time values
+    _all_capacity_retention = cd_cycling_filtered_cycle_data["capacity_retention/%"]
+    _capacity_retention_domain = [
+        _all_capacity_retention.min() / 1.02,
+        _all_capacity_retention.max() * 1.02,
+    ]
+
+    _capacity_cycle_chart = (
+        alt.Chart(cd_cycling_filtered_cycle_data)
+        .mark_point()
+        .encode(
+            x=alt.X("cycle:Q", title="Cycle"),
+            y=alt.Y(
+                "capacity_retention/%",
+                title="(Discharge) Capacity Retention / %",
+                scale=alt.Scale(domain=_capacity_retention_domain),
+            ),
+            color=alt.Color("participant:N", title="Participant"),
+            shape=alt.Shape("repetition:N", title="Repetition"),
+            opacity=alt.condition(
+                _participant_selection & _repetition_selection,
+                alt.value(1.0),
+                alt.value(0.0),
+            ),
+            tooltip=[
+                "participant:N",
+                "repetition:O",
+                "flow_rate:Q",
+                alt.Tooltip("cycle:Q", format=".0f"),
+                alt.Tooltip("charge_capacity/mAh:Q", format=".1f"),
+                alt.Tooltip("discharge_capacity/mAh:Q", format=".1f"),
+            ],
+        )
+        .properties(
+            width=720,
+            height=300,
+        )
+    )
+
+    # CHARGE-DISCHARGE CYCLING EVALUATION
+    # STEP 3c: Build bar chart for cycle-based capacity fade rates per participant and repetition
+    _capacity_fade_cycle_chart = (
+        alt.Chart(cd_cycling_filtered_capacity_fade_cycle)
+        .mark_bar()
+        .encode(
+            x=alt.X(
+                "capacity_fade_rate/cycle:Q", title="Capacity fade rate / % cycle⁻¹"
+            ),
+            y=alt.Y(
+                "participant:N", axis=alt.Axis(title=None, labels=False, ticks=False)
+            ),
+            yOffset=alt.YOffset("repetition:O", title="Repetition"),
+            color=alt.Color("participant:N", title="Participant"),
+            opacity=alt.Opacity("repetition:O", title="Repetition", scale=alt.Scale(range=[1, 0.33])),
+            tooltip=[
+                "study_phase:O",
+                "participant:N",
+                "repetition:O",
+                "flow_rate:Q",
+                alt.Tooltip("capacity_fade_rate/cycle:Q", format=".4f"),
+            ],
+        )
+        .properties(
+            width=170,
+            height=300,
+        )
+    )
+
+    # build the final chart by concatenating the capacity-time and capacity fade rate charts and resolving the legends
+    cd_cycling_capacity_cycle_chart = (
+        alt.hconcat(_capacity_cycle_chart, _capacity_fade_cycle_chart)
+        .resolve_legend(color="shared")
+        .properties(
+            title=alt.TitleParams(
+                text="Figure 9. Capacity retention over cycle (left) and corresponding capacity fade rate (right).",
+                subtitle=[
+                    "Data is shown for the selected participants and repetitions. Capacity fade rate was calculated as the slope of a linear regression over the (discharge) capacity retention vs. cycle data of",
+                    "each repetition individually.",
+                ],
+                anchor="start",
+                orient="top",
+                offset=20,
+            ),
+        )
+        .interactive()
+        .add_params(_participant_selection, _repetition_selection)
+        .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
+    )
+    return (cd_cycling_capacity_cycle_chart,)
 
 
-# @app.cell
-# def _(cd_cycling_filtered_cycle_data):
-#     # CHARGE-DISCHARGE CYCLING EVALUATION
-#     # STEP 3b: Build boxplots from capacity data per repetition to compare the capacity distributions between repetitions
+@app.cell
+def _(
+    cd_cycling_filtered_capacity_fade_time,
+    cd_cycling_filtered_cycle_data,
+    wheel_zoom_x,
+    wheel_zoom_xy,
+    wheel_zoom_y,
+):
+    # CHARGE-DISCHARGE CYCLING EVALUATION
+    # STEP 3b: Build the capacity-time curves for the charge-discharge cycling data
 
-#     # build domains for the capacity values
-#     _all_capacity = cd_cycling_filtered_cycle_data["discharge_capacity/mAh"].abs()
-#     _capacity_domain = [_all_capacity.min(), _all_capacity.max()]
+    # create selectors and bind them to the legend
+    _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
+    _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
 
-#     # construct a box plot
-#     cd_cycling_capacity_repetition = (
-#         (
-#             alt.Chart(
-#                 cd_cycling_filtered_cycle_data,
-#             )
-#             .mark_boxplot(
-#                 size=50,
-#                 ticks={"size": 30},
-#                 median={"color": "black", "thickness": 2},
-#                 outliers={"size": 10, "shape": "circle"},
-#             )
-#             .encode(
-#                 x=alt.X("repetition:O", title="Repetition"),
-#                 y=alt.Y(
-#                     "discharge_capacity/mAh:Q",
-#                     title="(Discharge) Capacity / mAh",
-#                     scale=alt.Scale(domain=_capacity_domain),
-#                 ),
-#                 color=alt.Color("repetition:O", title="Repetition"),
-#                 # opacity=alt.condition(_legend_sel, alt.value(1.0), alt.value(0.05)),
-#             )
-#         )
-#         .properties(
-#             title=alt.TitleParams(
-#                 text="Figure 12. Capacity distribution per repetition",
-#                 subtitle=[
-#                     "Boxplots showing the distribution of discharge capacity values for each repetition",
-#                     "across all cycles and all participants.",
-#                 ],
-#                 anchor="start",
-#                 orient="top",
-#                 offset=20,
-#             ),
-#             width=325,
-#         )
-#         .configure_axisX(labelAngle=0)
-#     )
-#     return (cd_cycling_capacity_repetition,)
+    # build domains for the capacity retention values and time values
+    _all_capacity_retention = cd_cycling_filtered_cycle_data["capacity_retention/%"]
+    _capacity_retention_domain = [
+        _all_capacity_retention.min() / 1.02,
+        _all_capacity_retention.max() * 1.02,
+    ]
+
+    # build a chart of capacity vs. time for the selected cycle
+    _capacity_time_chart = (
+        alt.Chart(cd_cycling_filtered_cycle_data)
+        .mark_point()
+        .encode(
+            x=alt.X("time/h:Q", title="Time / h"),
+            y=alt.Y(
+                "capacity_retention/%:Q",
+                title="(Discharge) Capacity Retention / %",
+                scale=alt.Scale(domain=_capacity_retention_domain),
+            ),
+            color=alt.Color("participant:N", title="Participant"),
+            shape=alt.Shape("repetition:N", title="Repetition"),
+            opacity=alt.condition(
+                _participant_selection & _repetition_selection,
+                alt.value(1.0),
+                alt.value(0.0),
+            ),
+            tooltip=[
+                "participant:N",
+                "repetition:O",
+                "flow_rate:Q",
+                "cycle:O",
+                alt.Tooltip("time/h:Q", format=".0f"),
+                alt.Tooltip("discharge_capacity/mAh:Q", format=".1f"),
+            ],
+        )
+        .properties(
+            width=720,
+            height=300,
+        )
+    )
+
+    # build a chart of capacity fade rate vs. time for the selected cycle
+    _capacity_fade_time_chart = (
+        alt.Chart(cd_cycling_filtered_capacity_fade_time)
+        .mark_bar()
+        .encode(
+            x=alt.X("capacity_fade_rate/%/d:Q", title="Capacity fade rate / % d⁻¹"),
+            y=alt.Y(
+                "participant:N", axis=alt.Axis(title=None, labels=False, ticks=False)
+            ),
+            yOffset=alt.YOffset("repetition:O", title="Repetition"),
+            color=alt.Color("participant:N", title="Participant"),
+            opacity=alt.Opacity("repetition:O", title="Repetition",scale=alt.Scale(range=[1, 0.33])),
+            tooltip=[
+                "study_phase:N",
+                "participant:N",
+                "repetition:O",
+                "flow_rate:Q",
+                alt.Tooltip("capacity_fade_rate/%/d:Q", format=".4f"),
+            ],
+        )
+        .properties(
+            width=170,
+            height=300,
+        )
+    )
+
+    # build the final chart by concatenating the capacity-time and capacity fade rate charts and resolving the legends
+    cd_cycling_capacity_time_chart = (
+        alt.hconcat(_capacity_time_chart, _capacity_fade_time_chart)
+        .resolve_legend(color="shared")
+        .properties(
+            title=alt.TitleParams(
+                text="Figure 10. Capacity retention over time (left) and corresponding capacity fade rate (right).",
+                subtitle=[
+                    "Data is shown for the selected participants and repetitions. Capacity fade rate was calculated as the slope of a linear regression over the (discharge) capacity retention vs. time data of ",
+                    "each repetition individually.",
+                ],
+                anchor="start",
+                orient="top",
+                offset=20,
+            )
+        )
+        .interactive()
+        .add_params(_participant_selection, _repetition_selection)
+        .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
+    )
+    return (cd_cycling_capacity_time_chart,)
 
 
-# @app.cell
-# def section_charge_discharge_cycling(
-#     cd_cycling_capacity_cycle_chart,
-#     cd_cycling_capacity_participant,
-#     cd_cycling_capacity_repetition,
-#     cd_cycling_capacity_time_chart,
-#     cd_cycling_charts,
-#     cd_cycling_filtered_df,
-#     cd_cycling_initial_discharge_capacity,
-#     slider_half_cycle,
-#     theoretical_capacity_mAh,
-# ):
-#     mo.vstack(
-#         [
-#             mo.md("## Charge-Discharge Cycling"),
-#             mo.md("""
-#                 This section allows you to visualize the results of the charge-discharge cycling experiments. You can select one or more files containing the charge-discharge data, and the notebook will generate visualizations to help you analyze the results and compare different repetitions and runs.
-#             """),
-#             mo.md("<br>"),
-#             mo.md("### Raw data exploration"),
-#             mo.md("""
-#                 The expandable sections enables you to explore the raw charge-discharge cycling data of all selected datasets in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
-#             """),
-#             mo.accordion(
-#                 {
-#                     "Data table": cd_cycling_filtered_df,
-#                     "Data explorer": mo.ui.data_explorer(cd_cycling_filtered_df),
-#                 },
-#                 lazy=True,
-#                 multiple=True,
-#             ),
-#             mo.md("<br>"),
-#             mo.md("### Voltage-capacity data"),
-#             mo.md("""
-#                 These plots show the relationship between the voltage and the capacity for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as the presence of different plateaus corresponding to different electrochemical reactions, changes in internal resistance, and capacity fade over cycles. You can compare the curves across different participants and repetitions to identify trends or differences in the charge-discharge behavior. Use the slider to select the cycle to display.
-#             """),
-#             mo.vstack(
-#                 [
-#                     mo.md("**Select cycle:**"),
-#                     slider_half_cycle,
-#                     cd_cycling_charts,
-#                 ]
-#             ),
-#             mo.md("<br>"),
-#             mo.md("### Capacity distribution per participant and repetition"),
-#             mo.md(f"""
-#                 These plots show the distribution of capacity values across all cycles for each participant and repetition, respectively. The boxplots display the median, interquartile range, and outliers of the capacity values, allowing you to compare the capacity distributions between participants and repetitions and identify trends or differences in the capacity performance. The average **initial (discharge) capacity** over the selected dataset ({len(cd_cycling_initial_discharge_capacity)} experiments) is **{cd_cycling_initial_discharge_capacity["capacity/mAh"].mean():.1f} mAh ± {(cd_cycling_initial_discharge_capacity["capacity/mAh"].std() if len(cd_cycling_initial_discharge_capacity) > 1 else 0):.1f} mAh** (uncertainty: standard deviation), which represents an average **capacity utilization of {(cd_cycling_initial_discharge_capacity["capacity/mAh"].mean() / theoretical_capacity_mAh):.1%}** with respect to the theoretical capacity as per the protocol defined electrolyte composition (0.2 M redox-active species).
-#             """),
-#             mo.md("<br>"),
-#             mo.hstack(
-#                 [
-#                     cd_cycling_capacity_participant,
-#                     cd_cycling_capacity_repetition,
-#                 ]
-#             ),
-#             mo.md("<br>"),
-#             mo.md("### Capacity fade"),
-#             mo.md("""
-#                 These plots show the capacity retention over cycles and time for each selected file. The first plot shows the capacity at the end of each half cycle (i.e., after each charge and discharge step, respectively) over the cycle number, while the second plot shows the capacity over time. You can use these plots to analyze the capacity fade behavior of the system and identify trends or differences between participants and repetitions.
-#             """),
-#             mo.md("<br>"),
-#             cd_cycling_capacity_cycle_chart,
-#             mo.md("<br>"),
-#             cd_cycling_capacity_time_chart,
-#             mo.md("<br>"),
-#         ]
-#     )
-#     return
+@app.cell
+def _(cd_cycling_filtered_cycle_data):
+    # CHARGE-DISCHARGE CYCLING EVALUATION
+    # STEP 3b: Build boxplots from capacity data per participant to compare the capacity distributions between participants
+
+    # build domains for the capacity values
+    _all_capacity = cd_cycling_filtered_cycle_data["discharge_capacity/mAh"].abs()
+    _capacity_domain = [_all_capacity.min(), _all_capacity.max()]
+
+    # construct a box plot
+    cd_cycling_capacity_participant = (
+        (
+            alt.Chart(
+                cd_cycling_filtered_cycle_data,
+            )
+            .mark_boxplot(
+                size=50,
+                ticks={"size": 30},
+                median={"color": "black", "thickness": 2},
+                outliers={"size": 10, "shape": "circle"},
+            )
+            .encode(
+                x=alt.X("participant:N", title="Participant"),
+                y=alt.Y(
+                    "discharge_capacity/mAh:Q",
+                    title="(Discharge) Capacity / mAh",
+                    scale=alt.Scale(domain=_capacity_domain),
+                ),
+                color=alt.Color("participant:N", title="Participant"),
+                # opacity=alt.condition(_legend_sel, alt.value(1.0), alt.value(0.05)),
+            )
+        )
+        .properties(
+            title=alt.TitleParams(
+                text="Figure 11. Capacity distribution per participant",
+                subtitle=[
+                    "Boxplots showing the distribution of discharge capacity values for each participant",
+                    "across all cycles and all repetitions.",
+                ],
+                anchor="start",
+                orient="top",
+                offset=20,
+            ),
+            width=325,
+        )
+        .configure_axisX(labelAngle=-45)
+    )
+    return (cd_cycling_capacity_participant,)
+
+
+@app.cell
+def _(cd_cycling_filtered_cycle_data):
+    # CHARGE-DISCHARGE CYCLING EVALUATION
+    # STEP 3b: Build boxplots from capacity data per repetition to compare the capacity distributions between repetitions
+
+    # build domains for the capacity values
+    _all_capacity = cd_cycling_filtered_cycle_data["discharge_capacity/mAh"].abs()
+    _capacity_domain = [_all_capacity.min(), _all_capacity.max()]
+
+    # construct a box plot
+    cd_cycling_capacity_repetition = (
+        (
+            alt.Chart(
+                cd_cycling_filtered_cycle_data,
+            )
+            .mark_boxplot(
+                size=50,
+                ticks={"size": 30},
+                median={"color": "black", "thickness": 2},
+                outliers={"size": 10, "shape": "circle"},
+            )
+            .encode(
+                x=alt.X("repetition:O", title="Repetition"),
+                y=alt.Y(
+                    "discharge_capacity/mAh:Q",
+                    title="(Discharge) Capacity / mAh",
+                    scale=alt.Scale(domain=_capacity_domain),
+                ),
+                color=alt.Color("repetition:O", title="Repetition"),
+                # opacity=alt.condition(_legend_sel, alt.value(1.0), alt.value(0.05)),
+            )
+        )
+        .properties(
+            title=alt.TitleParams(
+                text="Figure 12. Capacity distribution per repetition",
+                subtitle=[
+                    "Boxplots showing the distribution of discharge capacity values for each repetition",
+                    "across all cycles and all participants.",
+                ],
+                anchor="start",
+                orient="top",
+                offset=20,
+            ),
+            width=325,
+        )
+        .configure_axisX(labelAngle=0)
+    )
+    return (cd_cycling_capacity_repetition,)
+
+
+@app.cell
+def section_charge_discharge_cycling(
+    cd_cycling_capacity_cycle_chart,
+    cd_cycling_capacity_participant,
+    cd_cycling_capacity_repetition,
+    cd_cycling_capacity_time_chart,
+    cd_cycling_charts,
+    cd_cycling_filtered_df,
+    cd_cycling_initial_discharge_capacity,
+    slider_half_cycle,
+    theoretical_capacity_mAh,
+):
+    mo.vstack(
+        [
+            mo.md("## Charge-Discharge Cycling"),
+            mo.md("""
+                This section allows you to visualize the results of the charge-discharge cycling experiments. You can select one or more files containing the charge-discharge data, and the notebook will generate visualizations to help you analyze the results and compare different repetitions and runs.
+            """),
+            mo.md("<br>"),
+            mo.md("### Raw data exploration"),
+            mo.md("""
+                The expandable sections enables you to explore the raw charge-discharge cycling data of all selected datasets in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
+            """),
+            mo.accordion(
+                {
+                    "Data table": cd_cycling_filtered_df,
+                    "Data explorer": mo.ui.data_explorer(cd_cycling_filtered_df),
+                },
+                lazy=True,
+                multiple=True,
+            ),
+            mo.md("<br>"),
+            mo.md("### Voltage-capacity data"),
+            mo.md("""
+                These plots show the relationship between the voltage and the capacity for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as the presence of different plateaus corresponding to different electrochemical reactions, changes in internal resistance, and capacity fade over cycles. You can compare the curves across different participants and repetitions to identify trends or differences in the charge-discharge behavior. Use the slider to select the cycle to display.
+            """),
+            mo.vstack(
+                [
+                    mo.md("**Select cycle:**"),
+                    slider_half_cycle,
+                    cd_cycling_charts,
+                ]
+            ),
+            mo.md("<br>"),
+            mo.md("### Capacity distribution per participant and repetition"),
+            mo.md(f"""
+                These plots show the distribution of capacity values across all cycles for each participant and repetition, respectively. The boxplots display the median, interquartile range, and outliers of the capacity values, allowing you to compare the capacity distributions between participants and repetitions and identify trends or differences in the capacity performance. The average **initial (discharge) capacity** over the selected dataset ({len(cd_cycling_initial_discharge_capacity)} experiments) is **{cd_cycling_initial_discharge_capacity["capacity/mAh"].mean():.1f} mAh ± {(cd_cycling_initial_discharge_capacity["capacity/mAh"].std() if len(cd_cycling_initial_discharge_capacity) > 1 else 0):.1f} mAh** (uncertainty: standard deviation), which represents an average **capacity utilization of {(cd_cycling_initial_discharge_capacity["capacity/mAh"].mean() / theoretical_capacity_mAh):.1%}** with respect to the theoretical capacity as per the protocol defined electrolyte composition (0.2 M redox-active species).
+            """),
+            mo.md("<br>"),
+            mo.hstack(
+                [
+                    cd_cycling_capacity_participant,
+                    cd_cycling_capacity_repetition,
+                ]
+            ),
+            mo.md("<br>"),
+            mo.md("### Capacity fade"),
+            mo.md("""
+                These plots show the capacity retention over cycles and time for each selected file. The first plot shows the capacity at the end of each half cycle (i.e., after each charge and discharge step, respectively) over the cycle number, while the second plot shows the capacity over time. You can use these plots to analyze the capacity fade behavior of the system and identify trends or differences between participants and repetitions.
+            """),
+            mo.md("<br>"),
+            cd_cycling_capacity_cycle_chart,
+            mo.md("<br>"),
+            cd_cycling_capacity_time_chart,
+            mo.md("<br>"),
+        ]
+    )
+    return
 
 
 if __name__ == "__main__":
