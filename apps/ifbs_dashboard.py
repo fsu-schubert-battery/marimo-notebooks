@@ -302,120 +302,120 @@ def _(study_phase_selector):
     return (theoretical_capacity_mAh,)
 
 
-# @app.cell
-# def _(
-#     cd_cycling_filtered_capacity_fade_time,
-#     cd_cycling_initial_discharge_capacity,
-#     data_structure_df,
-#     study_phase_selector,
-#     theoretical_capacity_mAh,
-# ):
-#     # STUDY METRICS SUMMARY
+@app.cell
+def _(
+    cd_cycling_filtered_capacity_fade_time,
+    cd_cycling_initial_discharge_capacity,
+    data_structure_df,
+    study_phase_selector,
+    theoretical_capacity_mAh,
+):
+    # STUDY METRICS SUMMARY
 
-#     stat_phase = mo.stat(
-#         value=f"{study_phase_selector.value.capitalize().replace("_", " ")}",
-#         label="Study Phase",
-#         caption="Number of participants",
-#     ).style(
-#         padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
-#         border="1px solid #aaaaaa",
-#         border_radius="5px",
-#         background_color="#f8f8f8",
-#     )
+    stat_phase = mo.stat(
+        value=f"{study_phase_selector.value.capitalize().replace("_", " ")}",
+        label="Study Phase",
+        caption="Number of participants",
+    ).style(
+        padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
+        border="1px solid #aaaaaa",
+        border_radius="5px",
+        background_color="#f8f8f8",
+    )
 
-#     stat_participants = mo.stat(
-#         value=f"{data_structure_df['participant'].unique().len()}",
-#         label="Participants",
-#         caption="Number of participants",
-#     ).style(
-#         padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
-#         border="1px solid #aaaaaa",
-#         border_radius="5px",
-#         background_color="#f8f8f8",
-#     )
+    stat_participants = mo.stat(
+        value=f"{data_structure_df['participant'].unique().len()}",
+        label="Participants",
+        caption="Number of participants",
+    ).style(
+        padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
+        border="1px solid #aaaaaa",
+        border_radius="5px",
+        background_color="#f8f8f8",
+    )
 
-#     stat_experiments = mo.stat(
-#         value=f"{len(
-#             data_structure_df
-#             .filter(
-#                 pl.col("study_phase").is_in([study_phase_selector.value])
-#             )
-#             .group_by(
-#                 "study_phase",
-#                 "participant",
-#                 "repetition",
-#             )
-#             .count()
-#             .sort(["study_phase", "participant", "repetition"])
-#         )}",
-#         label="Experiments",
-#         caption="Number of experiments",
-#     ).style(
-#         padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
-#         border="1px solid #aaaaaa",
-#         border_radius="5px",
-#         background_color="#f8f8f8",
-#     )
+    stat_experiments = mo.stat(
+        value=f"{len(
+            data_structure_df
+            .filter(
+                pl.col("study_phase").is_in([study_phase_selector.value])
+            )
+            .group_by(
+                "study_phase",
+                "participant",
+                "repetition",
+            )
+            .count()
+            .sort(["study_phase", "participant", "repetition"])
+        )}",
+        label="Experiments",
+        caption="Number of experiments",
+    ).style(
+        padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
+        border="1px solid #aaaaaa",
+        border_radius="5px",
+        background_color="#f8f8f8",
+    )
 
-#     stat_capacity = mo.stat(
-#         value=f"{(
-#             cd_cycling_initial_discharge_capacity["capacity/mAh"].mean()
-#         ):.1f} ± {(
-#             cd_cycling_initial_discharge_capacity["capacity/mAh"].std()
-#         ):.1f}",
-#         label="Initial Capacity (mAh)",
-#         caption="Average over all experiments",
-#     ).style(
-#         padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
-#         border="1px solid #aaaaaa",
-#         border_radius="5px",
-#         background_color="#f8f8f8",
-#     )
+    stat_capacity = mo.stat(
+        value=f"{(
+            cd_cycling_initial_discharge_capacity["capacity/mAh"].mean()
+        ):.1f} ± {(
+            cd_cycling_initial_discharge_capacity["capacity/mAh"].std()
+        ):.1f}",
+        label="Initial Capacity (mAh)",
+        caption="Average over all experiments",
+    ).style(
+        padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
+        border="1px solid #aaaaaa",
+        border_radius="5px",
+        background_color="#f8f8f8",
+    )
 
-#     stat_capacity_utilization = mo.stat(
-#         value=f"{(
-#             (cd_cycling_initial_discharge_capacity["capacity/mAh"] / theoretical_capacity_mAh * 100).mean()
-#         ):.1f} ± {(
-#         (cd_cycling_initial_discharge_capacity["capacity/mAh"] / theoretical_capacity_mAh * 100).std()
-#         ):.1f}",
-#         label="Capacity Utilization (%)",
-#         caption="Average over all experiments",
-#     ).style(
-#         padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
-#         border="1px solid #aaaaaa",
-#         border_radius="5px",
-#         background_color="#f8f8f8",
-#     )
+    stat_capacity_utilization = mo.stat(
+        value=f"{(
+            (cd_cycling_initial_discharge_capacity["capacity/mAh"] / theoretical_capacity_mAh * 100).mean()
+        ):.1f} ± {(
+        (cd_cycling_initial_discharge_capacity["capacity/mAh"] / theoretical_capacity_mAh * 100).std()
+        ):.1f}",
+        label="Capacity Utilization (%)",
+        caption="Average over all experiments",
+    ).style(
+        padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
+        border="1px solid #aaaaaa",
+        border_radius="5px",
+        background_color="#f8f8f8",
+    )
 
-#     stat_fade_rate = mo.stat(
-#         value=f"{(
-#             cd_cycling_filtered_capacity_fade_time['capacity_fade_rate/%/d'].mean()
-#         ):.2f} ± {(
-#             cd_cycling_filtered_capacity_fade_time['capacity_fade_rate/%/d'].std()
-#         ):.2f}",
-#         label="Capacity Fade (% d⁻¹)",
-#         caption="Average over all experiments",
-#         direction=f"{"increase" if cd_cycling_filtered_capacity_fade_time['capacity_fade_rate/%/d'].mean() > 0 else "decrease"}",
-#     ).style(
-#         padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
-#         border="1px solid #aaaaaa",
-#         border_radius="5px",
-#         background_color="#f8f8f8",
-#     )
+    stat_fade_rate = mo.stat(
+        value=f"{(
+            cd_cycling_filtered_capacity_fade_time['capacity_fade_rate/%/d'].mean()
+        ):.2f} ± {(
+            cd_cycling_filtered_capacity_fade_time['capacity_fade_rate/%/d'].std()
+        ):.2f}",
+        label="Capacity Fade (% d⁻¹)",
+        caption="Average over all experiments",
+        direction=f"{"increase" if cd_cycling_filtered_capacity_fade_time['capacity_fade_rate/%/d'].mean() > 0 else "decrease"}",
+    ).style(
+        padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
+        border="1px solid #aaaaaa",
+        border_radius="5px",
+        background_color="#f8f8f8",
+    )
 
-#     mo.vstack([
+    mo.vstack([
 
-#         mo.hstack([
-#             stat_phase,
-#             stat_participants,
-#             stat_experiments,
-#             stat_capacity, 
-#             stat_capacity_utilization,
-#             stat_fade_rate,
-#         ], justify="start", gap="1"),
+        mo.hstack([
+            stat_phase,
+            stat_participants,
+            stat_experiments,
+            stat_capacity, 
+            stat_capacity_utilization,
+            stat_fade_rate,
+        ], justify="start", gap="1"),
 
-#     ])
-#     return
+    ])
+    return
 
 
 @app.cell(hide_code=True)
@@ -2546,7 +2546,7 @@ def section_charge_discharge_cycling(
                 [
                     mo.md("**Select cycle:**"),
                     slider_half_cycle,
-                    cd_cycling_charts,
+                    # cd_cycling_charts,
                 ]
             ),
             mo.md("<br>"),
