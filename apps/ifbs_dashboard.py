@@ -5,7 +5,7 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "marimo[recommended]>=0.20.1",
-#     "polars>=1.38.1",
+#     "polars>=0.19.0",
 #     "scipy>=1.11.0",
 #     "numpy>=1.24.0",
 #     "altair>=5.0.0",
@@ -111,7 +111,7 @@ def _():
                         )
 
                     )
-                    .dt.total_seconds(fractional=True)
+                    .dt.total_nanoseconds() / 1_000_000_000
                     .alias("time/s")
                 )
             )
