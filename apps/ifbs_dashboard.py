@@ -1334,18 +1334,46 @@ def _(polarisation_filtered_df):
     )
 
     # downsample the data for better performance in the plot
+    # bin voltage to every 15 mV per half cycle and keep only keep median values within each voltage bin 
+    # to preserve the overall curve shape while reducing the number of points
     _downsampled_chart_data = (
-        _chart_data.sort(
-            [
-                *_meta_cols,
-                "time/s",
-            ]
+        _chart_data.with_columns(
+            #build voltage bins and compute median of each bin per group
+            (pl.col("voltage/V") / 0.015).round().alias("voltage_bin"),
         )
         .with_columns(
-            pl.int_range(0, pl.len()).over([*_meta_cols, "Ns"]).alias("_i")
+            pl.col("voltage/V").median().over([
+                *_meta_cols, 
+                "Ns", 
+                "voltage_bin",
+            ]).alias("_v_med"),
         )
-        .filter((pl.col("_i") % 10) == 0)
-        .drop("_i")
+        .with_columns(
+            # compute distance to median voltage within each voltage bin 
+            # to keep the closest-to-median point for better curve representation after downsampling
+            (pl.col("voltage/V") - pl.col("_v_med")).abs().alias("_v_dist")
+        )
+        .sort([
+            *_meta_cols, 
+            "Ns", 
+            "voltage_bin", 
+            "_v_dist", 
+            "time/s"
+        ])
+        .group_by([
+            *_meta_cols, 
+            "Ns", 
+            "voltage_bin"
+        ])
+        .agg(
+            pl.all().first()
+        )
+        .drop(["_v_med", "_v_dist", "voltage_bin"])
+        .sort([
+            *_meta_cols,
+            "Ns", 
+            "time/s"
+        ])
     )
 
     # create selectors and bind them to the legend
@@ -1776,7 +1804,7 @@ def section_polarisation(
                 These plots show the relationship between the current and the overvoltage (i.e., applied voltage - OCV) for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as activation losses, ohmic losses, and mass transport limitations. You can compare the curves across different participants and repetitions to identify trends or differences in the polarisation behavior.
             """),
             mo.md("<br>"),
-            # polarisation_plots,
+            polarisation_plots,
             polarisation_voltage_current_plots,
             mo.md("<br>"),
             mo.md("### Polarisation resistance comparison"),
@@ -1854,7 +1882,7 @@ def _(cd_cycling_filtered_df):
     )
 
     # downsample the data for better performance in the plot
-    # truncate time to every 10 mV per half cycle and keep only keep median values within each voltage bin 
+    # bin voltage to every 10 mV per half cycle and keep only keep median values within each voltage bin 
     # to preserve the overall curve shape while reducing the number of points
     df_filtered_cd_cycling_chart_data = (
         df_filtered_cd_cycling_data.with_columns(
