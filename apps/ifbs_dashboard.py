@@ -1334,51 +1334,56 @@ def _(polarisation_filtered_df):
         ]
     )
 
-    # downsample the data for better performance in the plot to a maximum of 10000 points
-    n = 0
-    _downsampled_chart_data = pl.DataFrame()
-    while len(_downsampled_chart_data) < 10000:
+    # downsample the data for better performance in the plot to a maximum of 20000 points
+    for n in range(1, 100, 1):
+
+        # bin width
+        bin_w = n * 1  # time bin width in s (e.g., 1 s, 2 s, etc.)
     
         _downsampled_chart_data = (
             _chart_data.with_columns(
-                #build voltage bins and compute median of each bin per group
-                (pl.col("voltage/V") / (pl.col("voltage/V").max() / n) * 1000).round().cast(pl.Int32).alias("voltage_bin"),
+                # build time-based bins
+                ((pl.col("time/s") / bin_w).round() * bin_w).alias("time_bin"),
             )
             .with_columns(
-                pl.col("voltage/V").median().over([
+                # compute median time within each bin per sequence (Ns)
+                pl.col("time/s").median().over([
                     *_meta_cols, 
                     "Ns", 
-                    "voltage_bin",
-                ]).alias("_v_med"),
+                    "time_bin",
+                ]).alias("_t_med"),
             )
             .with_columns(
-                # compute distance to median voltage within each voltage bin 
+                # compute distance to median time within each bin per sequence (Ns)
                 # to keep the closest-to-median point for better curve representation after downsampling
-                (pl.col("voltage/V") - pl.col("_v_med")).abs().alias("_v_dist")
+                (pl.col("time/s") - pl.col("_t_med")).abs().alias("_t_dist")
             )
             .sort([
                 *_meta_cols, 
                 "Ns", 
-                "voltage_bin", 
-                "_v_dist",
+                "time_bin", 
+                "_t_dist",
             ])
             .group_by([
                 *_meta_cols, 
                 "Ns", 
-                "voltage_bin"
+                "time_bin"
             ])
             .agg(
+                # keep the first row after sorting by distance to median time as the representative point for each bin
                 pl.all().first()
             )
-            .drop(["_v_med", "_v_dist", "voltage_bin"])
+            .drop(["_t_med", "_t_dist"])
             .sort([
                 *_meta_cols,
                 "Ns", 
                 "time/s"
             ])
         )
-    
-        n += 1
+
+        #print(n, bin_w, len(_downsampled_chart_data), len(_chart_data))
+        if len(_downsampled_chart_data) <= 20000:
+            break
 
     # create selectors and bind them to the legend
     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
