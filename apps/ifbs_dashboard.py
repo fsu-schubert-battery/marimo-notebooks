@@ -1854,19 +1854,27 @@ def _(cd_cycling_filtered_df):
     )
 
     # downsample the data for better performance in the plot
+    # truncate time to every 10 mV per half cycle and keep only keep median values within each voltage bin 
+    # to preserve the overall curve shape while reducing the number of points
     df_filtered_cd_cycling_chart_data = (
-        df_filtered_cd_cycling_data.sort(
+        df_filtered_cd_cycling_data.with_columns(
+            (pl.col("voltage/V") / 0.01).round().alias("voltage_bin"),
+        ).group_by(
+            *_meta_cols,
+            "half cycle",
+            "voltage_bin",
+        ).agg(
+            pl.col("voltage/V").median().alias("voltage/V"),
+            pl.col("current/mA").median().alias("current/mA"),
+            pl.col("capacity/mAh").median().alias("capacity/mAh"),
+            pl.col("dQ/dV").median().alias("dQ/dV"),
+        ).sort(
             [
                 *_meta_cols,
                 "half cycle",
-                "time/s",
+                "voltage_bin",
             ]
-        )
-        .with_columns(
-            pl.int_range(0, pl.len()).over([*_meta_cols, "half cycle"]).alias("_i")
-        )
-        .filter((pl.col("_i") % 10) == 0)
-        .drop("_i")
+        ).drop("voltage_bin")
     )
 
     # create a ui slider to chose the half-cycle to display
@@ -1902,6 +1910,7 @@ def _(
     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
     _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
 
+    # filter the data for the selected cycle (i.e., half cycle) 
     _cd_cycling_capacity_voltage_data = df_filtered_cd_cycling_chart_data.filter(
         (pl.col("half cycle") == slider_half_cycle.value)
         | (pl.col("half cycle") == slider_half_cycle.value + 1)
@@ -1948,19 +1957,7 @@ def _(
     # build a plot of dQ/dV vs. voltage for the selected cycle
     cd_cycling_dqdv_charts = (
         alt.Chart(
-            df_filtered_cd_cycling_data.sort(
-                [
-                    "study_phase",
-                    "participant",
-                    "repetition",
-                    "flow_rate",
-                    "half cycle",
-                    "time/s",
-                ]
-            ).filter(
-                (pl.col("half cycle") == slider_half_cycle.value)
-                | (pl.col("half cycle") == slider_half_cycle.value + 1)
-            )
+            _cd_cycling_capacity_voltage_data
         )
         .mark_bar(
             orient="horizontal",
@@ -2010,6 +2007,7 @@ def _(
         .add_params(_participant_selection, _repetition_selection)
         .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
     )
+
     return (cd_cycling_charts,)
 
 
@@ -2546,7 +2544,7 @@ def section_charge_discharge_cycling(
                 [
                     mo.md("**Select cycle:**"),
                     slider_half_cycle,
-                    # cd_cycling_charts,
+                    cd_cycling_charts,
                 ]
             ),
             mo.md("<br>"),
