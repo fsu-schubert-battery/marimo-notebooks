@@ -1314,488 +1314,488 @@ def _(
     return (polarisation_filtered_df,)
 
 
-# @app.cell
-# def _(polarisation_filtered_df):
-#     # POLARISATION DATA EVALUATION
-#     # STEP 2a: Plot the time-voltage curves
+@app.cell
+def _(polarisation_filtered_df):
+    # POLARISATION DATA EVALUATION
+    # STEP 2a: Plot the time-voltage curves
 
-#     # shift time to start at 0 per file (identified by metadata group)
-#     _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
-#     _chart_data = polarisation_filtered_df.with_columns(
-#         (pl.col("time/s") - pl.col("time/s").min()).over(_meta_cols).alias("time/s"),
-#     ).select(
-#         [
-#             *_meta_cols,
-#             "Ns",
-#             "time/s",
-#             "voltage/V",
-#             "current/mA",
-#         ]
-#     )
+    # shift time to start at 0 per file (identified by metadata group)
+    _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
+    _chart_data = polarisation_filtered_df.with_columns(
+        (pl.col("time/s") - pl.col("time/s").min()).over(_meta_cols).alias("time/s"),
+    ).select(
+        [
+            *_meta_cols,
+            "Ns",
+            "time/s",
+            "voltage/V",
+            "current/mA",
+        ]
+    )
 
-#     # downsample the data for better performance in the plot
-#     _downsampled_chart_data = (
-#         _chart_data.sort(
-#             [
-#                 *_meta_cols,
-#                 "time/s",
-#             ]
-#         )
-#         .with_columns(
-#             pl.int_range(0, pl.len()).over([*_meta_cols, "Ns"]).alias("_i")
-#         )
-#         .filter((pl.col("_i") % 10) == 0)
-#         .drop("_i")
-#     )
+    # downsample the data for better performance in the plot
+    _downsampled_chart_data = (
+        _chart_data.sort(
+            [
+                *_meta_cols,
+                "time/s",
+            ]
+        )
+        .with_columns(
+            pl.int_range(0, pl.len()).over([*_meta_cols, "Ns"]).alias("_i")
+        )
+        .filter((pl.col("_i") % 10) == 0)
+        .drop("_i")
+    )
 
-#     # create selectors and bind them to the legend
-#     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
-#     _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
-#     _flow_rate_selection = alt.selection_point(fields=["flow_rate"], bind="legend")
+    # create selectors and bind them to the legend
+    _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
+    _repetition_selection = alt.selection_point(fields=["repetition"], bind="legend")
+    _flow_rate_selection = alt.selection_point(fields=["flow_rate"], bind="legend")
 
-#     # build polarisation plot from single flat DataFrame
-#     polarisation_plots = (
-#         alt.Chart(_downsampled_chart_data)
-#         .mark_point()
-#         .encode(
-#             x=alt.X("time/s", title="Time / s"),
-#             y=alt.Y("voltage/V", title="Voltage / V"),
-#             color=alt.Color("participant:N", title="Participant"),
-#             shape=alt.Shape("repetition:N", title="Repetition"),
-#             size=alt.Size(
-#                 "flow_rate:N",
-#                 title="Flow Rate (mL/min⁻¹)",
-#                 scale=alt.Scale(range=[30, 150]),
-#             ),
-#             opacity=alt.condition(
-#                 _participant_selection 
-#                 & _repetition_selection
-#                 & _flow_rate_selection,
-#                 alt.value(1.0),
-#                 alt.value(0.0),
-#             ),
-#             tooltip=[
-#                 "participant:N",
-#                 "repetition:O",
-#                 "flow_rate:Q",
-#                 alt.Tooltip("time/s:Q", format=".1f"),
-#                 alt.Tooltip("voltage/V:Q", format=".4f"),
-#             ],
-#         )
-#         .properties(
-#             title="Polarisation Plot",
-#         )
-#         .add_params(_participant_selection, _repetition_selection, _flow_rate_selection)
-#     ).properties(
-#         title=alt.TitleParams(
-#             text="Figure 4. Current-overvoltage curves for selected participants and repetitions",
-#             subtitle="Current-overvoltage curves showing the relationship between current and overvoltage for each selected file.",
-#             anchor="start",
-#             orient="top",
-#             offset=20,
-#         ),
-#         height=400,
-#     )
-#     return (polarisation_plots,)
-
-
-# @app.cell
-# def _(get_linregress_params, polarisation_filtered_df):
-#     # POLARISATION DATA EVALUATION
-#     # STEP 3a: Calculate the polarisation resistances based on the step voltages and applied currents (using a linear regression)
-
-#     # define evaluation parameters
-#     step_evaluation_tail_length = 10  # number of samples from the end of each step to consider for the evaluation
-#     rest_current_tolerance = 1        # rest current tolerance (± X mA) to filter out rest steps
-
-#     # aggregate the data: group_by now includes metadata columns alongside Ns
-#     _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
-#     polarisation_current_voltage_df = (
-#         polarisation_filtered_df.group_by(
-#             *_meta_cols,
-#             "Ns",
-#             maintain_order=True,
-#         )
-#         .agg(
-#             pl.col("voltage/V")
-#             .tail(step_evaluation_tail_length)
-#             .median()
-#             .alias("voltage/V"),
-#             pl.col("current/mA")
-#             .tail(step_evaluation_tail_length)
-#             .median()
-#             .alias("current/mA"),
-#         )
-#         .with_columns(
-#             (pl.col("voltage/V") / pl.col("current/mA") * 1000).alias(
-#                 "polarisation_resistance/Ohm"
-#             ),
-#         )
-#         .select(
-#             [
-#                 *_meta_cols,
-#                 "Ns",
-#                 "voltage/V",
-#                 "current/mA",
-#                 "polarisation_resistance/Ohm",
-#             ]
-#         )
-#     )
-
-#     # drop rows where current is close to zero (rest steps) based on the defined tolerance
-#     polarisation_current_voltage_df = polarisation_current_voltage_df.filter(
-#         (pl.col("current/mA").abs() > rest_current_tolerance)
-#     ).sort([*_meta_cols, "Ns"])
-
-#     # perform linear regression on grouped data to get polarisation resistance as slope of the voltage-current curve for each participant, repetition, and flow rate
-#     polarisation_resistance_df = (
-#         polarisation_current_voltage_df.group_by(
-#             *_meta_cols,
-#         )
-#         .map_groups(
-#             lambda df: get_linregress_params(
-#                 df=df,
-#                 x_name="current/mA",
-#                 y_name="voltage/V",
-#                 with_columns=[
-#                     *_meta_cols,
-#                     "Ns",
-#                     "current/mA",
-#                     "voltage/V",
-#                 ],
-#             )
-#         )
-#         .with_columns(
-#             (pl.col("slope") * 1000).alias("polarisation_resistance/Ohm"),
-#             (pl.col("stderr") * 1000).alias("polarisation_resistance_stderr/Ohm"),
-#         )
-#         .select(
-#             [
-#                 *_meta_cols,
-#                 "Ns",
-#                 "voltage/V",
-#                 "current/mA",
-#                 "polarisation_resistance/Ohm",
-#                 "polarisation_resistance_stderr/Ohm",
-#             ]
-#         )
-#         .sort([*_meta_cols, "Ns"])
-#     )
-#     return (
-#         polarisation_current_voltage_df,
-#         polarisation_resistance_df,
-#         step_evaluation_tail_length,
-#     )
+    # build polarisation plot from single flat DataFrame
+    polarisation_plots = (
+        alt.Chart(_downsampled_chart_data)
+        .mark_point()
+        .encode(
+            x=alt.X("time/s", title="Time / s"),
+            y=alt.Y("voltage/V", title="Voltage / V"),
+            color=alt.Color("participant:N", title="Participant"),
+            shape=alt.Shape("repetition:N", title="Repetition"),
+            size=alt.Size(
+                "flow_rate:N",
+                title="Flow Rate (mL/min⁻¹)",
+                scale=alt.Scale(range=[30, 150]),
+            ),
+            opacity=alt.condition(
+                _participant_selection 
+                & _repetition_selection
+                & _flow_rate_selection,
+                alt.value(1.0),
+                alt.value(0.0),
+            ),
+            tooltip=[
+                "participant:N",
+                "repetition:O",
+                "flow_rate:Q",
+                alt.Tooltip("time/s:Q", format=".1f"),
+                alt.Tooltip("voltage/V:Q", format=".4f"),
+            ],
+        )
+        .properties(
+            title="Polarisation Plot",
+        )
+        .add_params(_participant_selection, _repetition_selection, _flow_rate_selection)
+    ).properties(
+        title=alt.TitleParams(
+            text="Figure 4. Current-overvoltage curves for selected participants and repetitions",
+            subtitle="Current-overvoltage curves showing the relationship between current and overvoltage for each selected file.",
+            anchor="start",
+            orient="top",
+            offset=20,
+        ),
+        height=400,
+    )
+    return (polarisation_plots,)
 
 
-# @app.cell
-# def _(polarisation_current_voltage_df):
-#     # POLARISATION DATA EVALUATION
-#     # STEP 3b: Plot the step voltage over the step current
+@app.cell
+def _(get_linregress_params, polarisation_filtered_df):
+    # POLARISATION DATA EVALUATION
+    # STEP 3a: Calculate the polarisation resistances based on the step voltages and applied currents (using a linear regression)
 
-#     # compute per-axis data ranges, then build domains with some padding
-#     _all_currents = polarisation_current_voltage_df["current/mA"].abs()
-#     _current_max = _all_currents.max()
-#     _current_domain = [-_current_max * 1.1, _current_max * 1.1]
+    # define evaluation parameters
+    step_evaluation_tail_length = 10  # number of samples from the end of each step to consider for the evaluation
+    rest_current_tolerance = 1        # rest current tolerance (± X mA) to filter out rest steps
 
-#     # selectors bound to legends
-#     _participant_selection = alt.selection_point(encodings=["color"], bind="legend")
-#     _repetition_selection = alt.selection_point(encodings=["shape"], bind="legend")
-#     _flow_rate_selection = alt.selection_point(encodings=["size"], bind="legend")
+    # aggregate the data: group_by now includes metadata columns alongside Ns
+    _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
+    polarisation_current_voltage_df = (
+        polarisation_filtered_df.group_by(
+            *_meta_cols,
+            "Ns",
+            maintain_order=True,
+        )
+        .agg(
+            pl.col("voltage/V")
+            .tail(step_evaluation_tail_length)
+            .median()
+            .alias("voltage/V"),
+            pl.col("current/mA")
+            .tail(step_evaluation_tail_length)
+            .median()
+            .alias("current/mA"),
+        )
+        .with_columns(
+            (pl.col("voltage/V") / pl.col("current/mA") * 1000).alias(
+                "polarisation_resistance/Ohm"
+            ),
+        )
+        .select(
+            [
+                *_meta_cols,
+                "Ns",
+                "voltage/V",
+                "current/mA",
+                "polarisation_resistance/Ohm",
+            ]
+        )
+    )
 
-#     points = (
-#         alt.Chart(polarisation_current_voltage_df)
-#         .mark_point(filled=True, size=50)
-#         .encode(
-#             x=alt.X(
-#                 "current/mA:Q",
-#                 title="Current / mA",
-#                 scale=alt.Scale(domain=_current_domain),
-#             ),
-#             y=alt.Y("voltage/V:Q", title="Voltage / V"),
-#             color=alt.Color("participant:N", title="Participant"),
-#             shape=alt.Shape("repetition:N", title="Repetition"),
-#             size=alt.Size(
-#                 "flow_rate:N",
-#                 title="Flow Rate (mL min⁻¹)",
-#                 scale=alt.Scale(range=[30, 150]),
-#             ),
-#             opacity=alt.condition(
-#                 _participant_selection
-#                 & _repetition_selection
-#                 & _flow_rate_selection,
-#                 alt.value(1.0),
-#                 alt.value(0.05),
-#             ),
-#             tooltip=[
-#                 "participant:N",
-#                 "repetition:O",
-#                 "flow_rate:Q",
-#                 alt.Tooltip("current/mA:Q", format=".1f"),
-#                 alt.Tooltip("voltage/V:Q", format=".4f"),
-#             ],
-#         )
-#     )
+    # drop rows where current is close to zero (rest steps) based on the defined tolerance
+    polarisation_current_voltage_df = polarisation_current_voltage_df.filter(
+        (pl.col("current/mA").abs() > rest_current_tolerance)
+    ).sort([*_meta_cols, "Ns"])
 
-#     regression_lines = (
-#         alt.Chart(polarisation_current_voltage_df)
-#         .transform_regression(
-#             "current/mA", "voltage/V", groupby=["participant", "repetition"]
-#         )
-#         .mark_line()
-#         .encode(
-#             x="current/mA:Q",
-#             y="voltage/V:Q",
-#             color=alt.Color("participant:N", title="Participant"),
-#             strokeDash=alt.StrokeDash(
-#                 "repetition:N", title="Repetition", legend=None
-#             ),  # dash in plot
-#             opacity=alt.condition(
-#                 _participant_selection
-#                 & _repetition_selection
-#                 & _flow_rate_selection,
-#                 alt.value(1.0),
-#                 alt.value(0.05),
-#             ),
-#         )
-#     )
-
-#     polarisation_voltage_current_plots = (
-#         alt.layer(points, regression_lines)
-#         .add_params(_participant_selection, _repetition_selection, _flow_rate_selection)
-#         .resolve_legend(color="shared", shape="shared", strokeDash="shared")
-#     )
-
-#     # polarisation_voltage_current_plots
-#     return (polarisation_voltage_current_plots,)
-
-
-# @app.cell
-# def _(polarisation_resistance_df):
-#     # POLARISATION DATA EVALUATION
-#     # STEP 3c: Plot polarisation resistance values per participants (mean value over repetitions)
-#     #          with error bars representing the standard deviation of the mean)
-
-#     # create a bar chart to compare the ESR values across participants and repetitions
-#     polarisation_resistance_per_participant = polarisation_resistance_df.group_by(
-#         "study_phase",
-#         "participant",
-#         "flow_rate",
-#     ).agg(
-#         pl.col("polarisation_resistance/Ohm").mean().alias("mean_resistance"),
-#         pl.col("polarisation_resistance/Ohm").std().alias("std_resistance"),
-#         pl.len().alias("cycles"),
-#     )
-
-#     # create selectors and bind them to the legend
-#     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
-
-#     _bars = (
-#         alt.Chart(polarisation_resistance_per_participant)
-#         .mark_bar()
-#         .encode(
-#             x=alt.X("participant:O", title="Participant"),
-#             y=alt.Y("mean_resistance:Q", title="Polarisation Resistance / Ohm"),
-#             xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
-#             color=alt.Color("participant:N", title="Study Phase"),
-#             opacity=alt.Opacity("flow_rate:N", title="Flow Rate", scale=alt.Scale(range=[1.0, 0.5])),
-#             tooltip=[
-#                 "study_phase:O",
-#                 "participant:O",
-#                 "flow_rate:O",
-#                 alt.Tooltip("mean_resistance:Q", format=".4f"),
-#                 alt.Tooltip("std_resistance:Q", format=".4f"),
-#                 "cycles:Q",
-#             ],
-#         )
-#         .add_params(
-#             _participant_selection,
-#         )
-#     )
-
-#     _errs = (
-#         alt.Chart(polarisation_resistance_per_participant)
-#         .mark_errorbar(
-#             ticks=True,
-#             size=10,
-#         )
-#         .encode(
-#             x="participant:O",
-#             y=alt.Y("mean_resistance:Q", title="Polarisation Resistance / Ohm"),
-#             yError="std_resistance:Q",
-#             xOffset="flow_rate:O",
-#             color=alt.value("#000000"),
-#         )
-#         .add_params(
-#             _participant_selection,
-#         )
-#     )
-
-#     polarisation_resistance_per_participant_plot = (
-#         alt.layer(_bars, _errs)
-#         .properties(
-#             title=alt.TitleParams(
-#                 text="Figure 6. Polarisation resistance per participant",
-#                 subtitle="Mean polarisation resistance values for each participant across selected repetitions.",
-#                 anchor="start",
-#                 orient="top",
-#                 offset=20,
-#             ),
-#             width=325,
-#         )
-#         .configure_axisX(labelAngle=-45)
-#     )
-#     return (polarisation_resistance_per_participant_plot,)
+    # perform linear regression on grouped data to get polarisation resistance as slope of the voltage-current curve for each participant, repetition, and flow rate
+    polarisation_resistance_df = (
+        polarisation_current_voltage_df.group_by(
+            *_meta_cols,
+        )
+        .map_groups(
+            lambda df: get_linregress_params(
+                df=df,
+                x_name="current/mA",
+                y_name="voltage/V",
+                with_columns=[
+                    *_meta_cols,
+                    "Ns",
+                    "current/mA",
+                    "voltage/V",
+                ],
+            )
+        )
+        .with_columns(
+            (pl.col("slope") * 1000).alias("polarisation_resistance/Ohm"),
+            (pl.col("stderr") * 1000).alias("polarisation_resistance_stderr/Ohm"),
+        )
+        .select(
+            [
+                *_meta_cols,
+                "Ns",
+                "voltage/V",
+                "current/mA",
+                "polarisation_resistance/Ohm",
+                "polarisation_resistance_stderr/Ohm",
+            ]
+        )
+        .sort([*_meta_cols, "Ns"])
+    )
+    return (
+        polarisation_current_voltage_df,
+        polarisation_resistance_df,
+        step_evaluation_tail_length,
+    )
 
 
-# @app.cell
-# def _(polarisation_resistance_df):
-#     # POLARISATION DATA EVALUATION
-#     # STEP 3d: Plot polarisation resistance values over repetition (mean value over participants)
-#     #          with error bars representing the standard deviation of the mean)
+@app.cell
+def _(polarisation_current_voltage_df):
+    # POLARISATION DATA EVALUATION
+    # STEP 3b: Plot the step voltage over the step current
 
-#     # create a bar chart to compare the ESR values across participants and repetitions
-#     polarisation_resistance_per_repetition = polarisation_resistance_df.group_by(
-#         "study_phase",
-#         "repetition",
-#         "flow_rate",
-#     ).agg(
-#         pl.col("polarisation_resistance/Ohm").mean().alias("mean_resistance"),
-#         pl.col("polarisation_resistance/Ohm").std().alias("std_resistance"),
-#         pl.len().alias("cycles"),
-#     )
+    # compute per-axis data ranges, then build domains with some padding
+    _all_currents = polarisation_current_voltage_df["current/mA"].abs()
+    _current_max = _all_currents.max()
+    _current_domain = [-_current_max * 1.1, _current_max * 1.1]
 
-#     # build domains for the polarisation resistance values
-#     _all_resistance = polarisation_resistance_df["polarisation_resistance/Ohm"]
-#     _all_mean_resistance = polarisation_resistance_per_repetition["mean_resistance"]
-#     _resistance_domain = [_all_resistance.min() / 1.1, _all_resistance.max() * 1.1]
-#     _mean_resistance_domain = [
-#         _all_mean_resistance.min() / 1.1,
-#         _all_mean_resistance.max() * 1.1,
-#     ]
+    # selectors bound to legends
+    _participant_selection = alt.selection_point(encodings=["color"], bind="legend")
+    _repetition_selection = alt.selection_point(encodings=["shape"], bind="legend")
+    _flow_rate_selection = alt.selection_point(encodings=["size"], bind="legend")
 
-#     # construct a box plot
-#     _boxplot = (
-#         alt.Chart(
-#             polarisation_resistance_df,
-#         )
-#         .mark_boxplot(
-#             size=25,
-#             ticks={"size": 10},
-#             median={"color": "black", "thickness": 2},
-#             outliers={"size": 15, "shape": "circle"},
-#         )
-#         .encode(
-#             x=alt.X("repetition:O", title="Repetition"),
-#             y=alt.Y(
-#                 "polarisation_resistance/Ohm:Q",
-#                 title="Polarisation Resistance / Ohm",
-#                 scale=alt.Scale(domain=_resistance_domain),
-#             ),
-#             xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
-#             color=alt.Color("repetition:O", title="Repetition"),
-#             opacity=alt.Opacity("flow_rate:O", title="Flow Rate", scale=alt.Scale(range=[1, 0.33])),
-#         )
-#     )
+    points = (
+        alt.Chart(polarisation_current_voltage_df)
+        .mark_point(filled=True, size=50)
+        .encode(
+            x=alt.X(
+                "current/mA:Q",
+                title="Current / mA",
+                scale=alt.Scale(domain=_current_domain),
+            ),
+            y=alt.Y("voltage/V:Q", title="Voltage / V"),
+            color=alt.Color("participant:N", title="Participant"),
+            shape=alt.Shape("repetition:N", title="Repetition"),
+            size=alt.Size(
+                "flow_rate:N",
+                title="Flow Rate (mL min⁻¹)",
+                scale=alt.Scale(range=[30, 150]),
+            ),
+            opacity=alt.condition(
+                _participant_selection
+                & _repetition_selection
+                & _flow_rate_selection,
+                alt.value(1.0),
+                alt.value(0.05),
+            ),
+            tooltip=[
+                "participant:N",
+                "repetition:O",
+                "flow_rate:Q",
+                alt.Tooltip("current/mA:Q", format=".1f"),
+                alt.Tooltip("voltage/V:Q", format=".4f"),
+            ],
+        )
+    )
 
-#     _mean = (
-#         alt.Chart(polarisation_resistance_per_repetition)
-#         .mark_point(
-#             color="black",
-#             opacity=0.75,
-#             shape="circle",
-#             size=50,
-#         )
-#         .encode(
-#             x=alt.X("repetition:O", title="Repetition"),
-#             y=alt.Y(
-#                 "mean_resistance:Q",
-#                 title="Polarisation Resistance / Ohm",
-#                 scale=alt.Scale(domain=_mean_resistance_domain),
-#             ),
-#             xOffset="flow_rate:O",
-#             tooltip=[
-#                 "study_phase:O",
-#                 "flow_rate:O",
-#                 alt.Tooltip("mean_resistance:Q", format=".4f"),
-#                 alt.Tooltip("std_resistance:Q", format=".4f"),
-#                 "cycles:Q",
-#             ],
-#         )
-#     )
+    regression_lines = (
+        alt.Chart(polarisation_current_voltage_df)
+        .transform_regression(
+            "current/mA", "voltage/V", groupby=["participant", "repetition"]
+        )
+        .mark_line()
+        .encode(
+            x="current/mA:Q",
+            y="voltage/V:Q",
+            color=alt.Color("participant:N", title="Participant"),
+            strokeDash=alt.StrokeDash(
+                "repetition:N", title="Repetition", legend=None
+            ),  # dash in plot
+            opacity=alt.condition(
+                _participant_selection
+                & _repetition_selection
+                & _flow_rate_selection,
+                alt.value(1.0),
+                alt.value(0.05),
+            ),
+        )
+    )
 
-#     polarisation_resistance_per_repetition_plot = (
-#         alt.layer(_boxplot, _mean)
-#         .properties(
-#             title=alt.TitleParams(
-#                 text="Figure 7. Polarisation resistance per repetition",
-#                 subtitle="Polarisation resistance values for each repetition across selected participants.",
-#                 anchor="start",
-#                 orient="top",
-#                 offset=20,
-#             ),
-#             width=325,
-#         )
-#         .configure_axisX(labelAngle=0)
-#     )
-#     return (polarisation_resistance_per_repetition_plot,)
+    polarisation_voltage_current_plots = (
+        alt.layer(points, regression_lines)
+        .add_params(_participant_selection, _repetition_selection, _flow_rate_selection)
+        .resolve_legend(color="shared", shape="shared", strokeDash="shared")
+    )
+
+    # polarisation_voltage_current_plots
+    return (polarisation_voltage_current_plots,)
 
 
-# @app.cell
-# def section_polarisation(
-#     polarisation_filtered_df,
-#     polarisation_plots,
-#     polarisation_resistance_per_participant_plot,
-#     polarisation_resistance_per_repetition_plot,
-#     polarisation_voltage_current_plots,
-#     step_evaluation_tail_length,
-# ):
-#     # display section content
-#     mo.vstack(
-#         [
-#             mo.md("## Polarisation experiments"),
-#             mo.md("""
-#                 This section allows you to visualize the results of the data from the polarisation experiments. You can select one or more files containing the polarisation data, and the notebook will generate visualizations to help you analyze the results and compare different repetitions and runs.
-#             """),
-#             mo.md("<br>"),
-#             mo.md("### Raw data exploration"),
-#             mo.md("""
-#                 The expandable sections enables you to explore the raw polarisation data of all selected datasets in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
-#             """),
-#             mo.accordion(
-#                 {
-#                     "Data table": polarisation_filtered_df,
-#                     "Data explorer": mo.ui.data_explorer(polarisation_filtered_df),
-#                 },
-#                 lazy=True,
-#                 multiple=True,
-#             ),
-#             mo.md("<br>"),
-#             mo.md("### Current-overvoltage curves"),
-#             mo.md("""
-#                 These plots show the relationship between the current and the overvoltage (i.e., applied voltage - OCV) for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as activation losses, ohmic losses, and mass transport limitations. You can compare the curves across different participants and repetitions to identify trends or differences in the polarisation behavior.
-#             """),
-#             mo.md("<br>"),
-#             polarisation_plots,
-#             polarisation_voltage_current_plots,
-#             mo.md("<br>"),
-#             mo.md("### Polarisation resistance comparison"),
-#             mo.md(f"""
-#                 These plots compare the extracted polarisation resistance values across participants and repititions. The polarisation resistance was calculated from the voltage and current values of the polarisation steps by first collecting the median voltage _versus_ median current of the last {step_evaluation_tail_length} points of each polarisation step. Subsequently, a linear regression was performed over the collected data. The first plot shows the mean polarisation resistance values for each participant with error bars representing the standard deviation across all selected repetitions. The second plot shows the mean polarisation resistance values for each repetition with error bars representing the standard deviation across all selected participants. You can use these plots to identify trends or differences in polarisation resistance values between participants and repetitions.
-#             """),
-#             mo.md("<br>"),
-#             mo.hstack(
-#                 [
-#                     polarisation_resistance_per_participant_plot,
-#                     polarisation_resistance_per_repetition_plot,
-#                 ],
-#                 widths="equal",
-#                 gap=0,
-#             ),
-#             mo.md("<br>"),
-#         ]
-#     )
-#     return
+@app.cell
+def _(polarisation_resistance_df):
+    # POLARISATION DATA EVALUATION
+    # STEP 3c: Plot polarisation resistance values per participants (mean value over repetitions)
+    #          with error bars representing the standard deviation of the mean)
+
+    # create a bar chart to compare the ESR values across participants and repetitions
+    polarisation_resistance_per_participant = polarisation_resistance_df.group_by(
+        "study_phase",
+        "participant",
+        "flow_rate",
+    ).agg(
+        pl.col("polarisation_resistance/Ohm").mean().alias("mean_resistance"),
+        pl.col("polarisation_resistance/Ohm").std().alias("std_resistance"),
+        pl.len().alias("cycles"),
+    )
+
+    # create selectors and bind them to the legend
+    _participant_selection = alt.selection_point(fields=["participant"], bind="legend")
+
+    _bars = (
+        alt.Chart(polarisation_resistance_per_participant)
+        .mark_bar()
+        .encode(
+            x=alt.X("participant:O", title="Participant"),
+            y=alt.Y("mean_resistance:Q", title="Polarisation Resistance / Ohm"),
+            xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
+            color=alt.Color("participant:N", title="Study Phase"),
+            opacity=alt.Opacity("flow_rate:N", title="Flow Rate", scale=alt.Scale(range=[1.0, 0.5])),
+            tooltip=[
+                "study_phase:O",
+                "participant:O",
+                "flow_rate:O",
+                alt.Tooltip("mean_resistance:Q", format=".4f"),
+                alt.Tooltip("std_resistance:Q", format=".4f"),
+                "cycles:Q",
+            ],
+        )
+        .add_params(
+            _participant_selection,
+        )
+    )
+
+    _errs = (
+        alt.Chart(polarisation_resistance_per_participant)
+        .mark_errorbar(
+            ticks=True,
+            size=10,
+        )
+        .encode(
+            x="participant:O",
+            y=alt.Y("mean_resistance:Q", title="Polarisation Resistance / Ohm"),
+            yError="std_resistance:Q",
+            xOffset="flow_rate:O",
+            color=alt.value("#000000"),
+        )
+        .add_params(
+            _participant_selection,
+        )
+    )
+
+    polarisation_resistance_per_participant_plot = (
+        alt.layer(_bars, _errs)
+        .properties(
+            title=alt.TitleParams(
+                text="Figure 6. Polarisation resistance per participant",
+                subtitle="Mean polarisation resistance values for each participant across selected repetitions.",
+                anchor="start",
+                orient="top",
+                offset=20,
+            ),
+            width=325,
+        )
+        .configure_axisX(labelAngle=-45)
+    )
+    return (polarisation_resistance_per_participant_plot,)
+
+
+@app.cell
+def _(polarisation_resistance_df):
+    # POLARISATION DATA EVALUATION
+    # STEP 3d: Plot polarisation resistance values over repetition (mean value over participants)
+    #          with error bars representing the standard deviation of the mean)
+
+    # create a bar chart to compare the ESR values across participants and repetitions
+    polarisation_resistance_per_repetition = polarisation_resistance_df.group_by(
+        "study_phase",
+        "repetition",
+        "flow_rate",
+    ).agg(
+        pl.col("polarisation_resistance/Ohm").mean().alias("mean_resistance"),
+        pl.col("polarisation_resistance/Ohm").std().alias("std_resistance"),
+        pl.len().alias("cycles"),
+    )
+
+    # build domains for the polarisation resistance values
+    _all_resistance = polarisation_resistance_df["polarisation_resistance/Ohm"]
+    _all_mean_resistance = polarisation_resistance_per_repetition["mean_resistance"]
+    _resistance_domain = [_all_resistance.min() / 1.1, _all_resistance.max() * 1.1]
+    _mean_resistance_domain = [
+        _all_mean_resistance.min() / 1.1,
+        _all_mean_resistance.max() * 1.1,
+    ]
+
+    # construct a box plot
+    _boxplot = (
+        alt.Chart(
+            polarisation_resistance_df,
+        )
+        .mark_boxplot(
+            size=25,
+            ticks={"size": 10},
+            median={"color": "black", "thickness": 2},
+            outliers={"size": 15, "shape": "circle"},
+        )
+        .encode(
+            x=alt.X("repetition:O", title="Repetition"),
+            y=alt.Y(
+                "polarisation_resistance/Ohm:Q",
+                title="Polarisation Resistance / Ohm",
+                scale=alt.Scale(domain=_resistance_domain),
+            ),
+            xOffset=alt.XOffset("flow_rate:O", title="Flow Rate"),
+            color=alt.Color("repetition:O", title="Repetition"),
+            opacity=alt.Opacity("flow_rate:O", title="Flow Rate", scale=alt.Scale(range=[1, 0.33])),
+        )
+    )
+
+    _mean = (
+        alt.Chart(polarisation_resistance_per_repetition)
+        .mark_point(
+            color="black",
+            opacity=0.75,
+            shape="circle",
+            size=50,
+        )
+        .encode(
+            x=alt.X("repetition:O", title="Repetition"),
+            y=alt.Y(
+                "mean_resistance:Q",
+                title="Polarisation Resistance / Ohm",
+                scale=alt.Scale(domain=_mean_resistance_domain),
+            ),
+            xOffset="flow_rate:O",
+            tooltip=[
+                "study_phase:O",
+                "flow_rate:O",
+                alt.Tooltip("mean_resistance:Q", format=".4f"),
+                alt.Tooltip("std_resistance:Q", format=".4f"),
+                "cycles:Q",
+            ],
+        )
+    )
+
+    polarisation_resistance_per_repetition_plot = (
+        alt.layer(_boxplot, _mean)
+        .properties(
+            title=alt.TitleParams(
+                text="Figure 7. Polarisation resistance per repetition",
+                subtitle="Polarisation resistance values for each repetition across selected participants.",
+                anchor="start",
+                orient="top",
+                offset=20,
+            ),
+            width=325,
+        )
+        .configure_axisX(labelAngle=0)
+    )
+    return (polarisation_resistance_per_repetition_plot,)
+
+
+@app.cell
+def section_polarisation(
+    polarisation_filtered_df,
+    polarisation_plots,
+    polarisation_resistance_per_participant_plot,
+    polarisation_resistance_per_repetition_plot,
+    polarisation_voltage_current_plots,
+    step_evaluation_tail_length,
+):
+    # display section content
+    mo.vstack(
+        [
+            mo.md("## Polarisation experiments"),
+            mo.md("""
+                This section allows you to visualize the results of the data from the polarisation experiments. You can select one or more files containing the polarisation data, and the notebook will generate visualizations to help you analyze the results and compare different repetitions and runs.
+            """),
+            mo.md("<br>"),
+            mo.md("### Raw data exploration"),
+            mo.md("""
+                The expandable sections enables you to explore the raw polarisation data of all selected datasets in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
+            """),
+            mo.accordion(
+                {
+                    "Data table": polarisation_filtered_df,
+                    "Data explorer": mo.ui.data_explorer(polarisation_filtered_df),
+                },
+                lazy=True,
+                multiple=True,
+            ),
+            mo.md("<br>"),
+            mo.md("### Current-overvoltage curves"),
+            mo.md("""
+                These plots show the relationship between the current and the overvoltage (i.e., applied voltage - OCV) for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as activation losses, ohmic losses, and mass transport limitations. You can compare the curves across different participants and repetitions to identify trends or differences in the polarisation behavior.
+            """),
+            mo.md("<br>"),
+            polarisation_plots,
+            polarisation_voltage_current_plots,
+            mo.md("<br>"),
+            mo.md("### Polarisation resistance comparison"),
+            mo.md(f"""
+                These plots compare the extracted polarisation resistance values across participants and repititions. The polarisation resistance was calculated from the voltage and current values of the polarisation steps by first collecting the median voltage _versus_ median current of the last {step_evaluation_tail_length} points of each polarisation step. Subsequently, a linear regression was performed over the collected data. The first plot shows the mean polarisation resistance values for each participant with error bars representing the standard deviation across all selected repetitions. The second plot shows the mean polarisation resistance values for each repetition with error bars representing the standard deviation across all selected participants. You can use these plots to identify trends or differences in polarisation resistance values between participants and repetitions.
+            """),
+            mo.md("<br>"),
+            mo.hstack(
+                [
+                    polarisation_resistance_per_participant_plot,
+                    polarisation_resistance_per_repetition_plot,
+                ],
+                widths="equal",
+                gap=0,
+            ),
+            mo.md("<br>"),
+        ]
+    )
+    return
 
 
 @app.cell
