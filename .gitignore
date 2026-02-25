@@ -1,6 +1,7 @@
 _site/
 __marimo__
 test_output
+.ifbs_dashboard.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

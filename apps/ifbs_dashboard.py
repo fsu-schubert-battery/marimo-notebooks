@@ -40,14 +40,6 @@ with app.setup:
     import json
     import polars as pl
 
-    # native-only dependencies (C-extensions, not available in Pyodide)
-    if not is_wasm():
-        from galvani.BioLogic import MPRfile
-        from yadg.subcommands import extract as yadg_extract
-    else:
-        MPRfile = None
-        yadg_extract = None
-
     # computation
     from functools import partial
     from scipy.stats import linregress
@@ -64,66 +56,6 @@ def _():
     # FILE I/O HELPERS
     # Isolated in their own cell so that changes to computation helpers
     # do not invalidate the persistent cache for file loading.
-
-    ######################################
-    # MPR Files
-    ######################################
-
-    # extract metadata only (requires yadg — native only)
-    def mpr_extract_metadata(path: str | Path, file_type: Optional[str] = None) -> dict:
-        if is_wasm():
-            raise RuntimeError("mpr_extract_metadata is not available in WASM mode")
-
-        # check the file_type based on the suffix if not provided
-        if file_type is None:
-            suf = path.suffix.lower()
-            if suf == ".mpr":
-                file_type = "eclab.mpr"
-            elif suf == ".mpt":
-                file_type = "eclab.mpt"
-            else:
-                raise ValueError(
-                    f"Unsupported suffix {path.suffix!r}. Provide file_type explicitly."
-                )
-
-        # extract metadata using yadg_extract() in a temporary directory
-        path = str(path)
-        with tempfile.TemporaryDirectory() as td:
-            out = Path(td) / "meta.json"
-            yadg_extract(
-                filetype=file_type, infile=path, outfile=str(out), meta_only=True
-            )
-            meta_data = (
-                json.loads(out.read_text(encoding="utf-8"))
-                .get("/", {})
-                .get("attrs", {})
-            )
-            meta_settings = json.loads(meta_data.get("original_metadata", {})).get(
-                "settings", {}
-            )
-            return meta_data, meta_settings
-
-    # get the technique from the metadata (requires yadg — native only)
-    def mpr_get_technique(
-        path: str | Path, file_type: Optional[str] = None
-    ) -> Optional[str]:
-        if is_wasm():
-            raise RuntimeError("mpr_get_technique is not available in WASM mode")
-        _, settings = mpr_extract_metadata(path, file_type)
-        return settings.get("technique", None)
-
-    def _ensure_local(file_path: str | Path) -> Path:
-        _path_str = str(file_path)
-        if _path_str.startswith(("http://", "https://")):
-            import urllib.request
-
-            _suffix = Path(_path_str.split("?")[0].split("/")[-1]).suffix
-            _fd = tempfile.NamedTemporaryFile(suffix=_suffix, delete=False)
-            with urllib.request.urlopen(_path_str) as _response:
-                _fd.write(_response.read())
-            _fd.close()
-            return Path(_fd.name)
-        return Path(file_path)
 
     @mo.persistent_cache
     def load_precomputed_df(name: str) -> pl.DataFrame:
@@ -150,52 +82,6 @@ def _():
 
         return pl.read_parquet(_source)
 
-    # Load a dataframe from a file, cached to disk per (file_path, technique_filter) pair.
-    # Data files are write-once (never change after creation), so content-based
-    # cache invalidation is unnecessary.
-    @mo.persistent_cache
-    def load_file(file_path, technique_filter=None):
-        if is_wasm():
-            raise RuntimeError("load_file is not available in WASM mode — use load_precomputed_df instead")
-        file_path = _ensure_local(file_path)
-        with open(file_path, "rb") as f:
-            if file_path.suffix == ".mpr":
-                if technique_filter is not None:
-                    tech = mpr_get_technique(file_path)
-
-                if (technique_filter is None) or (tech in technique_filter):
-                    mpr = MPRfile(f)
-                    df = pl.DataFrame(mpr.data)
-
-                    # get start datetime from galvani
-                    if hasattr(mpr, "timestamp"):
-                        start_dt = mpr.timestamp 
-                        if start_dt is not None:
-                            # add this OLE timestamp to the time/s column and convert to datetime
-                            df = df.with_columns(
-                                (pl.col("time/s") * 1000).cast(pl.Duration("ms")).alias("time/dt")
-                            ).with_columns(
-                                (pl.lit(start_dt) + pl.col("time/dt")).alias("datetime")
-                            ).drop("time/dt")
-
-                    # otherwise take from the files creation datetime (less accurate but better than nothing)
-                    else:
-                        created_dt = datetime.fromtimestamp(file_path.stat().st_ctime)
-                        df = df.with_columns(
-                            (pl.col("time/s") * 1000).cast(pl.Duration("ms")).alias("time/dt")
-                        ).with_columns(
-                            (pl.lit(created_dt) + pl.col("time/dt")).alias("datetime")
-                        ).drop("time/dt")
-
-                else:
-                    return None
-            elif file_path.suffix == ".csv":
-                df = pl.read_csv(f)
-            else:
-                raise ValueError(f"Unsupported file technique: {file_path.suffix}")
-        return df
-
-
     # re-calculate time/s of a dataframe based on datetime
     def recalculate_time(df: pl.DataFrame) -> pl.DataFrame:
         if "datetime" in df.columns:
@@ -220,7 +106,7 @@ def _():
         return df
 
 
-    return load_file, load_precomputed_df, recalculate_time
+    return load_precomputed_df, recalculate_time
 
 
 @app.cell(hide_code=True)
@@ -398,120 +284,120 @@ def _(study_phase_selector):
     return (theoretical_capacity_mAh,)
 
 
-@app.cell
-def _(
-    cd_cycling_filtered_capacity_fade_time,
-    cd_cycling_initial_discharge_capacity,
-    data_structure_df,
-    study_phase_selector,
-    theoretical_capacity_mAh,
-):
-    # STUDY METRICS SUMMARY
+# @app.cell
+# def _(
+#     cd_cycling_filtered_capacity_fade_time,
+#     cd_cycling_initial_discharge_capacity,
+#     data_structure_df,
+#     study_phase_selector,
+#     theoretical_capacity_mAh,
+# ):
+#     # STUDY METRICS SUMMARY
 
-    stat_phase = mo.stat(
-        value=f"{study_phase_selector.value.capitalize().replace("_", " ")}",
-        label="Study Phase",
-        caption="Number of participants",
-    ).style(
-        padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
-        border="1px solid #aaaaaa",
-        border_radius="5px",
-        background_color="#f8f8f8",
-    )
+#     stat_phase = mo.stat(
+#         value=f"{study_phase_selector.value.capitalize().replace("_", " ")}",
+#         label="Study Phase",
+#         caption="Number of participants",
+#     ).style(
+#         padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
+#         border="1px solid #aaaaaa",
+#         border_radius="5px",
+#         background_color="#f8f8f8",
+#     )
 
-    stat_participants = mo.stat(
-        value=f"{data_structure_df['participant'].unique().len()}",
-        label="Participants",
-        caption="Number of participants",
-    ).style(
-        padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
-        border="1px solid #aaaaaa",
-        border_radius="5px",
-        background_color="#f8f8f8",
-    )
+#     stat_participants = mo.stat(
+#         value=f"{data_structure_df['participant'].unique().len()}",
+#         label="Participants",
+#         caption="Number of participants",
+#     ).style(
+#         padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
+#         border="1px solid #aaaaaa",
+#         border_radius="5px",
+#         background_color="#f8f8f8",
+#     )
 
-    stat_experiments = mo.stat(
-        value=f"{len(
-            data_structure_df
-            .filter(
-                pl.col("study_phase").is_in([study_phase_selector.value])
-            )
-            .group_by(
-                "study_phase",
-                "participant",
-                "repetition",
-            )
-            .count()
-            .sort(["study_phase", "participant", "repetition"])
-        )}",
-        label="Experiments",
-        caption="Number of experiments",
-    ).style(
-        padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
-        border="1px solid #aaaaaa",
-        border_radius="5px",
-        background_color="#f8f8f8",
-    )
+#     stat_experiments = mo.stat(
+#         value=f"{len(
+#             data_structure_df
+#             .filter(
+#                 pl.col("study_phase").is_in([study_phase_selector.value])
+#             )
+#             .group_by(
+#                 "study_phase",
+#                 "participant",
+#                 "repetition",
+#             )
+#             .count()
+#             .sort(["study_phase", "participant", "repetition"])
+#         )}",
+#         label="Experiments",
+#         caption="Number of experiments",
+#     ).style(
+#         padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
+#         border="1px solid #aaaaaa",
+#         border_radius="5px",
+#         background_color="#f8f8f8",
+#     )
 
-    stat_capacity = mo.stat(
-        value=f"{(
-            cd_cycling_initial_discharge_capacity["capacity/mAh"].mean()
-        ):.1f} ± {(
-            cd_cycling_initial_discharge_capacity["capacity/mAh"].std()
-        ):.1f}",
-        label="Initial Capacity (mAh)",
-        caption="Average over all experiments",
-    ).style(
-        padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
-        border="1px solid #aaaaaa",
-        border_radius="5px",
-        background_color="#f8f8f8",
-    )
+#     stat_capacity = mo.stat(
+#         value=f"{(
+#             cd_cycling_initial_discharge_capacity["capacity/mAh"].mean()
+#         ):.1f} ± {(
+#             cd_cycling_initial_discharge_capacity["capacity/mAh"].std()
+#         ):.1f}",
+#         label="Initial Capacity (mAh)",
+#         caption="Average over all experiments",
+#     ).style(
+#         padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
+#         border="1px solid #aaaaaa",
+#         border_radius="5px",
+#         background_color="#f8f8f8",
+#     )
 
-    stat_capacity_utilization = mo.stat(
-        value=f"{(
-            (cd_cycling_initial_discharge_capacity["capacity/mAh"] / theoretical_capacity_mAh * 100).mean()
-        ):.1f} ± {(
-        (cd_cycling_initial_discharge_capacity["capacity/mAh"] / theoretical_capacity_mAh * 100).std()
-        ):.1f}",
-        label="Capacity Utilization (%)",
-        caption="Average over all experiments",
-    ).style(
-        padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
-        border="1px solid #aaaaaa",
-        border_radius="5px",
-        background_color="#f8f8f8",
-    )
+#     stat_capacity_utilization = mo.stat(
+#         value=f"{(
+#             (cd_cycling_initial_discharge_capacity["capacity/mAh"] / theoretical_capacity_mAh * 100).mean()
+#         ):.1f} ± {(
+#         (cd_cycling_initial_discharge_capacity["capacity/mAh"] / theoretical_capacity_mAh * 100).std()
+#         ):.1f}",
+#         label="Capacity Utilization (%)",
+#         caption="Average over all experiments",
+#     ).style(
+#         padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
+#         border="1px solid #aaaaaa",
+#         border_radius="5px",
+#         background_color="#f8f8f8",
+#     )
 
-    stat_fade_rate = mo.stat(
-        value=f"{(
-            cd_cycling_filtered_capacity_fade_time['capacity_fade_rate/%/d'].mean()
-        ):.2f} ± {(
-            cd_cycling_filtered_capacity_fade_time['capacity_fade_rate/%/d'].std()
-        ):.2f}",
-        label="Capacity Fade (% d⁻¹)",
-        caption="Average over all experiments",
-        direction=f"{"increase" if cd_cycling_filtered_capacity_fade_time['capacity_fade_rate/%/d'].mean() > 0 else "decrease"}",
-    ).style(
-        padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
-        border="1px solid #aaaaaa",
-        border_radius="5px",
-        background_color="#f8f8f8",
-    )
+#     stat_fade_rate = mo.stat(
+#         value=f"{(
+#             cd_cycling_filtered_capacity_fade_time['capacity_fade_rate/%/d'].mean()
+#         ):.2f} ± {(
+#             cd_cycling_filtered_capacity_fade_time['capacity_fade_rate/%/d'].std()
+#         ):.2f}",
+#         label="Capacity Fade (% d⁻¹)",
+#         caption="Average over all experiments",
+#         direction=f"{"increase" if cd_cycling_filtered_capacity_fade_time['capacity_fade_rate/%/d'].mean() > 0 else "decrease"}",
+#     ).style(
+#         padding="0px",          # optional, damit der Rahmen nicht “auf Kante” sitzt
+#         border="1px solid #aaaaaa",
+#         border_radius="5px",
+#         background_color="#f8f8f8",
+#     )
 
-    mo.vstack([
+#     mo.vstack([
 
-        mo.hstack([
-            stat_phase,
-            stat_participants,
-            stat_experiments,
-            stat_capacity, 
-            stat_capacity_utilization,
-            stat_fade_rate,
-        ], justify="start", gap="1"),
+#         mo.hstack([
+#             stat_phase,
+#             stat_participants,
+#             stat_experiments,
+#             stat_capacity, 
+#             stat_capacity_utilization,
+#             stat_fade_rate,
+#         ], justify="start", gap="1"),
 
-    ])
-    return
+#     ])
+#     return
 
 
 @app.cell(hide_code=True)
@@ -559,96 +445,20 @@ def _(load_precomputed_df):
     if not data_dir.exists():
         data_dir = Path(str(mo.notebook_location() / "public" / "data"))
 
-    if is_wasm():
-        data_structure_df = load_precomputed_df("data_structure_df").with_columns(
-            pl.col("study_phase").cast(pl.String),
-            pl.col("participant").cast(pl.String),
-            pl.col("repetition").cast(pl.Int16),
-            pl.col("flow_rate").cast(pl.Float64),
-            pl.col("technique").cast(pl.String),
-            pl.col("file_path").cast(pl.String),
+    data_structure_df = load_precomputed_df("data_structure_df").with_columns(
+        pl.col("study_phase").cast(pl.String),
+        pl.col("participant").cast(pl.String),
+        pl.col("repetition").cast(pl.Int16),
+        pl.col("flow_rate").cast(pl.Float64),
+        pl.col("technique").cast(pl.String),
+        pl.col("file_path").cast(pl.String),
         )
-    else:
-        # based on the folder structure create a dataframe with the following columns:
-        # phase, participant, repetition, flow_rate, technique, file_name, file_path
-        data_structure_df = pl.DataFrame(
-            [
-                {
-                    "study_phase": study_phase.name,
-                    "participant": p.name,
-                    "repetition": r.name,
-                    "flow_rate": f.name,
-                    "technique": t.name,
-                    "file_path": file,
-                }
-                for study_phase in data_dir.iterdir()
-                if study_phase.is_dir() and not study_phase.name.startswith(".")
-                for p in study_phase.iterdir()
-                if p.is_dir() and not p.name.startswith(".")
-                for r in p.iterdir()
-                if r.is_dir() and (not r.name.startswith(".") and not "fail" in r.name)
-                for f in r.iterdir()
-                if f.is_dir() and not f.name.startswith(".")
-                for t in f.iterdir()
-                if t.is_dir() and not t.name.startswith(".")
-                for file in t.iterdir()
-                if file.is_file()
-                and not file.name.startswith(".")
-                and file.suffix in [".mpr", ".csv"]
-            ],
-            schema={
-                "study_phase": pl.String,
-                "participant": pl.String,
-                "repetition": pl.Int16,
-                "flow_rate": pl.Float64,
-                "technique": pl.String,
-                "file_path": pl.Object,
-            },
-        )
-
+ 
     # sort the dataframe
     data_structure_df = data_structure_df.sort(
         ["study_phase", "participant", "repetition", "flow_rate", "technique"]
     )
     return data_dir, data_structure_df
-
-
-@app.cell(disabled=True, hide_code=True)
-def _(
-    flow_rate_selector,
-    participant_selector,
-    repetition_selector,
-    study_phase_selector,
-):
-    # OPTIONAL: Sticky app bar with filters
-
-    appbar = mo.Html(f"""
-    <style>
-      .appbar {{
-        position: fixed; top: 0;
-        left: 0;
-        z-index: 10000;
-        background: var(--marimo-background, white);
-        border-bottom: 1px solid rgba(0,0,0,0.08);
-        padding: 1rem 1rem 1rem 12rem;
-        width: 100%;
-      }}
-      .appbar-row {{
-        display: flex; gap: 4rem; align-items: center; 
-      }}
-    </style>
-
-    <div class="appbar">
-      <div class="appbar-row">
-        <div>{study_phase_selector}</div>
-        <div>{participant_selector}</div>
-        <div>{repetition_selector}</div>
-        <div>{flow_rate_selector}</div>    
-      </div>
-    </div>
-    """)
-    return
-
 
 @app.cell
 def _(data_structure_df):
@@ -784,39 +594,32 @@ def _(
 
 
 @app.cell
-def _(data_dir, load_precomputed_df, study_phase_selector):
+def _(load_precomputed_df, study_phase_selector):
     # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
     # STEP 1: Load the temperature data from the file and prepare it for visualization
 
-    if is_wasm():
-        temperature_data_df = (
-            load_precomputed_df("temperature_data_df")
-            .filter(pl.col("study_phase") == study_phase_selector.value)
-            .select(
-                pl.col("datetime").cast(pl.Datetime),
-                pl.col("time/s").cast(pl.Float64),
-                pl.col("temperature/°C").cast(pl.Float64),
-            )
+    temperature_data_df = (
+        load_precomputed_df("temperature_data_df")
+        .filter(pl.col("study_phase") == study_phase_selector.value)
+        .select(
+            pl.col("datetime").cast(pl.Datetime),
+            pl.col("time/s").cast(pl.Float64),
+            pl.col("temperature/°C").cast(pl.Float64),
         )
-    else:
-        temperature_data_file_path = data_dir / study_phase_selector.value / "Temperature" / "DL-200T_temperature.csv"
-
-        # load the temperature data file (cached via @mo.persistent_cache)
-        temperature_data_df = pl.read_csv(
-            temperature_data_file_path,
-            try_parse_dates=True,
-            decimal_comma=True,
-        ).with_columns(
-            # add column that shows time/h calculated from timestamp (assuming timestamp is in datetime format)
-            (pl.col("datetime").cast(pl.Datetime) - pl.col("datetime").cast(pl.Datetime).min())
-            .dt.total_seconds(fractional=True)
-            .alias("time/s"),
-        ).select(
-            pl.col("datetime"),
-            pl.col("time/s"),
-            pl.col("temperature_C").cast(pl.Float64).alias("temperature/°C"),
-        )
+    )
+    
     return (temperature_data_df,)
+
+
+@app.cell
+def _(load_precomputed_df):
+    # LOAD DATA FROM PRECOMPUTED DATAFRAMES
+
+    eis_flat_df = load_precomputed_df("eis_flat_df")
+    polarisation_flat_df = load_precomputed_df("polarisation_flat_df")
+    cd_cycling_flat_df = load_precomputed_df("cd_cycling_flat_df")
+    
+    return (eis_flat_df, polarisation_flat_df, cd_cycling_flat_df,)
 
 
 @app.cell
@@ -873,127 +676,128 @@ def _(temperature_data_df):
             height=150,
         )
     )
+
     temperature_time_chart
     return (temperature_time_chart,)
 
 
-@app.cell
-def _(
-    cd_cycling_filtered_df,
-    eis_filtered_df,
-    flow_rate_selector,
-    participant_selector,
-    polarisation_filtered_df,
-    repetition_selector,
-    study_phase_selector,
-    temperature_time_chart,
-    wheel_zoom_x,
-    wheel_zoom_xy,
-    wheel_zoom_y,
-):
-    # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
-    # STEP 2b: Build a Gantt chart showing the experiment time ranges for each participant and experiment technique, and overlay it with the temperature data
+# @app.cell
+# def _(
+#     cd_cycling_filtered_df,
+#     eis_filtered_df,
+#     flow_rate_selector,
+#     participant_selector,
+#     polarisation_filtered_df,
+#     repetition_selector,
+#     study_phase_selector,
+#     temperature_time_chart,
+#     wheel_zoom_x,
+#     wheel_zoom_xy,
+#     wheel_zoom_y,
+# ):
+#     # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
+#     # STEP 2b: Build a Gantt chart showing the experiment time ranges for each participant and experiment technique, and overlay it with the temperature data
 
-    # create a dataframe containing the start times of the first experiment of a participant and the end time of the last experiment of a participant (within a study phase) over all repetitions for each of the experiment phases (Impedance, Polarisation, Charge-discharge cycling)). The dataframe should have columns (study_phase, participant, technique, start_time/s, end_time/s), where technique is the experiment technique.
-    def _ranges(df, typ):
-        return (
-            df.filter(
-                pl.col("study_phase").is_in([study_phase_selector.value])
-                & pl.col("participant").is_in(participant_selector.value)
-                & pl.col("repetition").is_in(repetition_selector.value)
-                & pl.col("flow_rate").is_in(flow_rate_selector.value)
-            )
-            .group_by(
-                "study_phase", 
-                "participant",
-                "repetition",
-            ).agg(
-                pl.col("datetime").min().alias("start_datetime"),
-                pl.col("datetime").max().alias("end_datetime"),
-            )
-            .with_columns(
-                pl.lit(typ).alias("technique")
-            )
-            .select(
-                "study_phase",
-                "participant",
-                "repetition",
-                "technique",
-                pl.col("start_datetime").cast(pl.Datetime),
-                pl.col("end_datetime").cast(pl.Datetime),
-            )
-        )
+#     # create a dataframe containing the start times of the first experiment of a participant and the end time of the last experiment of a participant (within a study phase) over all repetitions for each of the experiment phases (Impedance, Polarisation, Charge-discharge cycling)). The dataframe should have columns (study_phase, participant, technique, start_time/s, end_time/s), where technique is the experiment technique.
+#     def _ranges(df, typ):
+#         return (
+#             df.filter(
+#                 pl.col("study_phase").is_in([study_phase_selector.value])
+#                 & pl.col("participant").is_in(participant_selector.value)
+#                 & pl.col("repetition").is_in(repetition_selector.value)
+#                 & pl.col("flow_rate").is_in(flow_rate_selector.value)
+#             )
+#             .group_by(
+#                 "study_phase", 
+#                 "participant",
+#                 "repetition",
+#             ).agg(
+#                 pl.col("datetime").min().alias("start_datetime"),
+#                 pl.col("datetime").max().alias("end_datetime"),
+#             )
+#             .with_columns(
+#                 pl.lit(typ).alias("technique")
+#             )
+#             .select(
+#                 "study_phase",
+#                 "participant",
+#                 "repetition",
+#                 "technique",
+#                 pl.col("start_datetime").cast(pl.Datetime),
+#                 pl.col("end_datetime").cast(pl.Datetime),
+#             )
+#         )
 
-    _experiment_schedules = (
-        pl.DataFrame(schema={
-            "study_phase": pl.String,
-            "participant": pl.String,
-            "repetition": pl.Int32,
-            "technique": pl.String,
-            "start_datetime": pl.Datetime,
-            "end_datetime": pl.Datetime,
-        })
-        .vstack(_ranges(eis_filtered_df, "Impedance"))
-        .vstack(_ranges(polarisation_filtered_df, "Polarisation"))
-        .vstack(_ranges(cd_cycling_filtered_df, "Charge-discharge"))
-        .sort(["study_phase", "start_datetime"])
-    )
+#     _experiment_schedules = (
+#         pl.DataFrame(schema={
+#             "study_phase": pl.String,
+#             "participant": pl.String,
+#             "repetition": pl.Int32,
+#             "technique": pl.String,
+#             "start_datetime": pl.Datetime,
+#             "end_datetime": pl.Datetime,
+#         })
+#         .vstack(_ranges(eis_filtered_df, "Impedance"))
+#         .vstack(_ranges(polarisation_filtered_df, "Polarisation"))
+#         .vstack(_ranges(cd_cycling_filtered_df, "Charge-discharge"))
+#         .sort(["study_phase", "start_datetime"])
+#     )
 
-    # create a Gantt chart visualizing the experiment time ranges for each participant and experiment technique, with the x-axis showing the time in days and the y-axis showing the participant. The bars should be colored by experiment technique and have tooltips showing the study phase, participant, experiment technique, start time, and end time.
-    experiment_schedule_chart = (
-        alt.Chart(_experiment_schedules)
-        .mark_bar()
-        .encode(
-            x=alt.X("start_datetime:T", title=""),
-            x2="end_datetime:T",
-            y=alt.Y("participant:N", title=""),
-            yOffset=alt.YOffset("technique:N", sort=["01 impedance", "02 polarisation", "03 charge-discharge"]),
-            color=alt.Color("technique:N", title="Technique"),
-            tooltip=[
-                "study_phase:N",
-                "participant:N",
-                "technique:N",
-                alt.Tooltip("start_datetime:T", title="Start time"),
-                alt.Tooltip("end_datetime:T", title="End time"),
-            ],
-        )
-        .properties(
-            width=975,
-            height=150,
-        )
-    )
+#     # create a Gantt chart visualizing the experiment time ranges for each participant and experiment technique, with the x-axis showing the time in days and the y-axis showing the participant. The bars should be colored by experiment technique and have tooltips showing the study phase, participant, experiment technique, start time, and end time.
+#     experiment_schedule_chart = (
+#         alt.Chart(_experiment_schedules)
+#         .mark_bar()
+#         .encode(
+#             x=alt.X("start_datetime:T", title=""),
+#             x2="end_datetime:T",
+#             y=alt.Y("participant:N", title=""),
+#             yOffset=alt.YOffset("technique:N", sort=["01 impedance", "02 polarisation", "03 charge-discharge"]),
+#             color=alt.Color("technique:N", title="Technique"),
+#             tooltip=[
+#                 "study_phase:N",
+#                 "participant:N",
+#                 "technique:N",
+#                 alt.Tooltip("start_datetime:T", title="Start time"),
+#                 alt.Tooltip("end_datetime:T", title="End time"),
+#             ],
+#         )
+#         .properties(
+#             width=975,
+#             height=150,
+#         )
+#     )
 
-    # create a combined chart overlaying the temperature data on the experiment schedule chart
-    combined_temperature_chart = (
-        alt.vconcat(
-            experiment_schedule_chart,
-            temperature_time_chart,
-        )
-        .resolve_scale(x="shared")
-        .properties(
-            title=alt.TitleParams(
-                text="Figure 13. Experiment time ranges with temperature data",
-                subtitle=[
-                    "Combined Gantt chart and line chart visualizing the experiment schedules per participant, along with the temperature data over time. The Gantt chart displays the time ranges of the different", 
-                    "techniques: Impedance spectroscopy (orange), polarisation (red), and charge-discharge cycling (blue) for each participant. while the line chart shows the temperature data over time.The x-axis", 
-                    " is shared between the two charts to allow for easy comparison of the experiment schedules with the temperature data.",
-                ],
-                anchor="start",
-                orient="top",
-                offset=20,
-            )
-        )
-        .interactive()
-        .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
-        .configure_legend(
-            title=None,
-            orient="top",
-            direction='horizontal',
-            disable=True,
-        )
-    )
-    combined_temperature_chart
-    return (combined_temperature_chart,)
+#     # create a combined chart overlaying the temperature data on the experiment schedule chart
+#     combined_temperature_chart = (
+#         alt.vconcat(
+#             experiment_schedule_chart,
+#             temperature_time_chart,
+#         )
+#         .resolve_scale(x="shared")
+#         .properties(
+#             title=alt.TitleParams(
+#                 text="Figure 13. Experiment time ranges with temperature data",
+#                 subtitle=[
+#                     "Combined Gantt chart and line chart visualizing the experiment schedules per participant, along with the temperature data over time. The Gantt chart displays the time ranges of the different", 
+#                     "techniques: Impedance spectroscopy (orange), polarisation (red), and charge-discharge cycling (blue) for each participant. while the line chart shows the temperature data over time.The x-axis", 
+#                     " is shared between the two charts to allow for easy comparison of the experiment schedules with the temperature data.",
+#                 ],
+#                 anchor="start",
+#                 orient="top",
+#                 offset=20,
+#             )
+#         )
+#         .interactive()
+#         .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
+#         .configure_legend(
+#             title=None,
+#             orient="top",
+#             direction='horizontal',
+#             disable=True,
+#         )
+#     )
+#     combined_temperature_chart
+#     return (combined_temperature_chart,)
 
 
 # @app.cell
@@ -1036,72 +840,6 @@ def _(
 #         ]
 #     )
 #     return
-
-
-@app.cell
-def _(data_structure_df, load_file, load_precomputed_df):
-    # IMPEDANCE SPECTROSCOPY EVALUATION
-    # STEP 1a: Load ALL EIS files from the full data_structure_df into a single flat DataFrame.
-    # Filtering by UI selectors is applied later at chart/computation time.
-
-    if is_wasm():
-        eis_flat_df = load_precomputed_df("eis_flat_df")
-    else:
-        # filter out impedance spectroscopy files from the full (unfiltered) structure
-        _df_eis = data_structure_df.filter(pl.col("technique") == "01 eis")
-
-        # load each file (cached via @mo.persistent_cache) and concatenate
-        # into a single flat DataFrame with metadata columns
-        _frames = []
-        for _row in _df_eis.iter_rows(named=True):
-            try:
-                _data = load_file(_row["file_path"], ["PEIS", "GEIS"])
-            except Exception as e:
-                print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
-                continue
-            if _data is not None:
-                # rename columns to have consistent naming across files
-                _data = _data.rename(
-                    {
-                        "cycle number": "cycle",
-                    },
-                    strict=False,
-
-                )
-
-                _frames.append(
-                    _data.with_columns(
-                        pl.lit(_row["study_phase"]).alias("study_phase"),
-                        pl.lit(_row["participant"]).alias("participant"),
-                        pl.lit(_row["repetition"]).alias("repetition"),
-                        pl.lit(_row["flow_rate"]).alias("flow_rate"),
-                        # shift study_phase, etc. to the leftmost position for easier access later on
-                    ).select(
-                        [
-                            "study_phase",
-                            "participant",
-                            "repetition",
-                            "flow_rate",
-                            *[
-                                col
-                                for col in _data.columns
-                                if col
-                                not in [
-                                    "study_phase",
-                                    "participant",
-                                    "repetition",
-                                    "flow_rate",
-                                ]
-                            ],
-                        ]
-                    )
-                )
-
-        eis_flat_df = (
-            pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
-        )
-    return (eis_flat_df,)
-
 
 @app.cell
 def _(
@@ -1510,99 +1248,33 @@ def _(
 #     return
 
 
-@app.cell
-def _(data_structure_df, load_file, load_precomputed_df):
-    # POLARISATION DATA EVALUATION
-    # STEP 1a: Load ALL polarisation files from the full data_structure_df into a single flat DataFrame.
+# @app.cell
+# def _(
+#     flow_rate_selector,
+#     participant_selector,
+#     polarisation_flat_df,
+#     recalculate_time,
+#     repetition_selector,
+#     study_phase_selector,
+# ):
+#     # POLARISATION DATA EVALUATION
+#     # STEP 1b: Filter the polarisation data according to the UI selectors
 
-    if is_wasm():
-        polarisation_flat_df = load_precomputed_df("polarisation_flat_df")
-    else:
-        # filter out polarisation files from the full (unfiltered) structure
-        _df_pol = data_structure_df.filter(pl.col("technique") == "02 polarisation")
+#     # apply UI filter
+#     polarisation_filtered_df = polarisation_flat_df.filter(
+#         pl.col("study_phase").is_in([study_phase_selector.value])
+#         & pl.col("participant").is_in(participant_selector.value)
+#         & pl.col("repetition").is_in(repetition_selector.value)
+#         & pl.col("flow_rate").is_in(flow_rate_selector.value)
+#     )
+#     mo.stop(
+#         polarisation_filtered_df.is_empty(),
+#     )
 
-        # load each file (cached per file via @mo.persistent_cache) and concatenate
-        # into a single flat DataFrame with metadata columns
-        _frames = []
-        for _row in _df_pol.iter_rows(named=True):
-            try:
-                _data = load_file(_row["file_path"], ["CP"])    
-            except Exception as e:
-                print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
-                continue
-            if _data is not None:
-                # rename current and voltage columns
-                _data = _data.rename(
-                    {
-                        "<I>/mA": "current/mA",
-                        "I/mA": "current/mA",
-                        "<Ewe>/V": "voltage/V",
-                        "Ewe/V": "voltage/V",
-                        "cycle number": "cycle",
-                    },
-                    strict=False,
-                )
-                _frames.append(
-                    _data.with_columns(
-                        pl.lit(_row["study_phase"]).alias("study_phase"),
-                        pl.lit(_row["participant"]).alias("participant"),
-                        pl.lit(_row["repetition"]).alias("repetition"),
-                        pl.lit(_row["flow_rate"]).alias("flow_rate"),
-                        # shift study_phase, etc. to the leftmost position for easier access later on
-                    ).select(
-                        [
-                            "study_phase",
-                            "participant",
-                            "repetition",
-                            "flow_rate",
-                            *[
-                                col
-                                for col in _data.columns
-                                if col
-                                not in [
-                                    "study_phase",
-                                    "participant",
-                                    "repetition",
-                                    "flow_rate",
-                                ]
-                            ],
-                        ]
-                    )
-                )
-
-        polarisation_flat_df = (
-            pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
-        )
-    return (polarisation_flat_df,)
-
-
-@app.cell
-def _(
-    flow_rate_selector,
-    participant_selector,
-    polarisation_flat_df,
-    recalculate_time,
-    repetition_selector,
-    study_phase_selector,
-):
-    # POLARISATION DATA EVALUATION
-    # STEP 1b: Filter the polarisation data according to the UI selectors
-
-    # apply UI filter
-    polarisation_filtered_df = polarisation_flat_df.filter(
-        pl.col("study_phase").is_in([study_phase_selector.value])
-        & pl.col("participant").is_in(participant_selector.value)
-        & pl.col("repetition").is_in(repetition_selector.value)
-        & pl.col("flow_rate").is_in(flow_rate_selector.value)
-    )
-    mo.stop(
-        polarisation_filtered_df.is_empty(),
-    )
-
-    # recalculate time/s from datetime column for each group (study_phase, participant, repetition, flow_rate)
-    # NOTE: We do this to properly handle multiple files in one experiment folder
-    polarisation_filtered_df = recalculate_time(polarisation_filtered_df)
-    return (polarisation_filtered_df,)
+#     # recalculate time/s from datetime column for each group (study_phase, participant, repetition, flow_rate)
+#     # NOTE: We do this to properly handle multiple files in one experiment folder
+#     polarisation_filtered_df = recalculate_time(polarisation_filtered_df)
+#     return (polarisation_filtered_df,)
 
 
 # @app.cell
@@ -2087,84 +1759,6 @@ def _(
 #         ]
 #     )
 #     return
-
-
-@app.cell
-def _(data_structure_df, load_file, load_precomputed_df):
-    # CHARGE-DISCHARGE CYCLING EVALUATION
-    # STEP 1a: Load ALL charge-discharge files from the full data_structure_df into a single flat DataFrame.
-    # Filtering by UI selectors is applied later at chart/computation time.
-
-    if is_wasm():
-        cd_cycling_flat_df = load_precomputed_df("cd_cycling_flat_df")
-    else:
-        # filter out charge-discharge files from the full (unfiltered) structure
-        _df_cd = data_structure_df.filter(pl.col("technique") == "03 charge-discharge")
-
-        # load each file (cached per file via @mo.persistent_cache) and concatenate
-        # into a single flat DataFrame with metadata columns
-        _frames = []
-        for _row in _df_cd.iter_rows(named=True):
-            try:
-                _data = load_file(_row["file_path"], ["GCPL"])    
-            except Exception as e:
-                print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
-                continue
-            if _data is not None:
-                # rename current and voltage columns
-                _data = _data.rename(
-                    {
-                        "<I>/mA": "current/mA",
-                        "I/mA": "current/mA",
-                        "<Ewe>/V": "voltage/V",
-                        "Ewe/V": "voltage/V",
-                    },
-                    strict=False,
-                )
-
-                # if no current column is found, try to extract it from the time and capacity columns
-                if "current/mA" not in _data.columns and "dq/mA.h" in _data.columns:
-                    # compute current from capacity and time (I = dQ/dt)
-                    _data = _data.with_columns(
-                        (
-                            pl.col("dq/mA.h").diff().fill_null(0)
-                            / pl.col("time/s").diff().fill_null(1)
-                            * 3600
-                        ).alias("current/mA")
-                    )
-
-                _frames.append(
-                    _data.with_columns(
-                        pl.lit(_row["study_phase"]).alias("study_phase"),
-                        pl.lit(_row["participant"]).alias("participant"),
-                        pl.lit(_row["repetition"]).alias("repetition"),
-                        pl.lit(_row["flow_rate"]).alias("flow_rate"),
-                        # shift study_phase, etc. to the leftmost position for easier access later on
-                    ).select(
-                        [
-                            "study_phase",
-                            "participant",
-                            "repetition",
-                            "flow_rate",
-                            *[
-                                col
-                                for col in _data.columns
-                                if col
-                                not in [
-                                    "study_phase",
-                                    "participant",
-                                    "repetition",
-                                    "flow_rate",
-                                ]
-                            ],
-                        ]
-                    )
-                )
-
-        cd_cycling_flat_df = (
-            pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
-        )
-    return (cd_cycling_flat_df,)
 
 
 @app.cell
