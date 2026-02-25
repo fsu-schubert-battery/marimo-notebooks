@@ -103,161 +103,163 @@ def _():
                 .sort(["study_phase", "participant", "repetition", "flow_rate", "datetime"])
                 .with_columns(
                     (
-                        pl.col("datetime") - pl.col("datetime").first().over(
-                            "study_phase", 
-                            "participant", 
-                            "repetition", 
-                            "flow_rate"
+                        (
+                            pl.col("datetime")
+                            - pl.col("datetime").first().over(
+                                "study_phase",
+                                "participant",
+                                "repetition",
+                                "flow_rate",
+                            )
                         )
-
-                    )
-                    .dt.total_nanoseconds() / 1_000_000_000
-                    .alias("time/s")
+                        .dt.total_nanoseconds()
+                        .cast(pl.Float64)
+                        / 1_000_000_000.0
+                    ).alias("time/s")
                 )
             )
 
         return df
 
-
     return load_precomputed_df, recalculate_time
 
 
-@app.cell(hide_code=True)
-def _():
-    # COMPUTATION HELPERS
+# @app.cell(hide_code=True)
+# def _():
+#     # COMPUTATION HELPERS
 
-    def get_x_intercepts(
-        df: pl.DataFrame | pl.LazyFrame,
-        *,
-        x: str = "x",
-        y: str = "y",
-        group: str = "dataset",
-        which: str = "all",  # "all" | "first" | "last" | "closest_to_zero"
-        assume_sorted: bool = False,
-    ) -> pl.DataFrame:
-        """
-        Compute x-axis intercept(s) (roots where y == 0) per group via vectorized
-        sign-change detection + linear interpolation between adjacent samples.
+#     def get_x_intercepts(
+#         df: pl.DataFrame | pl.LazyFrame,
+#         *,
+#         x: str = "x",
+#         y: str = "y",
+#         group: str = "dataset",
+#         which: str = "all",  # "all" | "first" | "last" | "closest_to_zero"
+#         assume_sorted: bool = False,
+#     ) -> pl.DataFrame:
+#         """
+#         Compute x-axis intercept(s) (roots where y == 0) per group via vectorized
+#         sign-change detection + linear interpolation between adjacent samples.
 
-        Requirements:
-          - df must be a Polars DataFrame or LazyFrame (NOT a Series)
-          - columns: group, x, y must exist and be numeric (x,y)
+#         Requirements:
+#           - df must be a Polars DataFrame or LazyFrame (NOT a Series)
+#           - columns: group, x, y must exist and be numeric (x,y)
 
-        Performance:
-          - O(n) if assume_sorted=True and already sorted by [group, x]
-          - otherwise includes a sort (O(n log n))
-          - runs lazily if df is LazyFrame; collects only at the end
-        """
+#         Performance:
+#           - O(n) if assume_sorted=True and already sorted by [group, x]
+#           - otherwise includes a sort (O(n log n))
+#           - runs lazily if df is LazyFrame; collects only at the end
+#         """
 
-        if isinstance(df, pl.Series):
-            raise TypeError(
-                "get_x_intercepts expected a Polars DataFrame/LazyFrame, got a Series. "
-                "Pass the full table (with group/x/y columns), not df['col']."
-            )
+#         if isinstance(df, pl.Series):
+#             raise TypeError(
+#                 "get_x_intercepts expected a Polars DataFrame/LazyFrame, got a Series. "
+#                 "Pass the full table (with group/x/y columns), not df['col']."
+#             )
 
-        lf = df.lazy() if isinstance(df, pl.DataFrame) else df
+#         lf = df.lazy() if isinstance(df, pl.DataFrame) else df
 
-        # Ensure we are sorting a frame, not a Series
-        if not assume_sorted:
-            lf = lf.sort([group, x])
+#         # Ensure we are sorting a frame, not a Series
+#         if not assume_sorted:
+#             lf = lf.sort([group, x])
 
-        x_c = pl.col(x)
-        y_c = pl.col(y)
+#         x_c = pl.col(x)
+#         y_c = pl.col(y)
 
-        lf = lf.with_columns(
-            [
-                x_c.shift(1).over(group).alias("_x0"),
-                y_c.shift(1).over(group).alias("_y0"),
-            ]
-        ).filter(pl.col("_y0").is_not_null())
+#         lf = lf.with_columns(
+#             [
+#                 x_c.shift(1).over(group).alias("_x0"),
+#                 y_c.shift(1).over(group).alias("_y0"),
+#             ]
+#         ).filter(pl.col("_y0").is_not_null())
 
-        # Crossing condition (handles exact zeros and sign flips)
-        crosses = (
-            (y_c == 0) | (pl.col("_y0") == 0) | (y_c.sign() != pl.col("_y0").sign())
-        )
+#         # Crossing condition (handles exact zeros and sign flips)
+#         crosses = (
+#             (y_c == 0) | (pl.col("_y0") == 0) | (y_c.sign() != pl.col("_y0").sign())
+#         )
 
-        # Interpolation: x0 - y0*(x-x0)/(y-y0) (avoid div0 by handling exact zeros above)
-        lf = (
-            lf.filter(crosses)
-            .with_columns(
-                pl.when(y_c == 0)
-                .then(x_c)
-                .when(pl.col("_y0") == 0)
-                .then(pl.col("_x0"))
-                .otherwise(
-                    pl.col("_x0")
-                    - pl.col("_y0") * (x_c - pl.col("_x0")) / (y_c - pl.col("_y0"))
-                )
-                .alias("x_intercept")
-            )
-            .select([pl.col(group), pl.col("x_intercept")])
-        )
+#         # Interpolation: x0 - y0*(x-x0)/(y-y0) (avoid div0 by handling exact zeros above)
+#         lf = (
+#             lf.filter(crosses)
+#             .with_columns(
+#                 pl.when(y_c == 0)
+#                 .then(x_c)
+#                 .when(pl.col("_y0") == 0)
+#                 .then(pl.col("_x0"))
+#                 .otherwise(
+#                     pl.col("_x0")
+#                     - pl.col("_y0") * (x_c - pl.col("_x0")) / (y_c - pl.col("_y0"))
+#                 )
+#                 .alias("x_intercept")
+#             )
+#             .select([pl.col(group), pl.col("x_intercept")])
+#         )
 
-        if which == "all":
-            return lf.collect()
+#         if which == "all":
+#             return lf.collect()
 
-        if which == "first":
-            return (
-                lf.group_by(group)
-                .agg(pl.col("x_intercept").min().alias("x_intercept"))
-                .collect()
-            )
+#         if which == "first":
+#             return (
+#                 lf.group_by(group)
+#                 .agg(pl.col("x_intercept").min().alias("x_intercept"))
+#                 .collect()
+#             )
 
-        if which == "last":
-            return (
-                lf.group_by(group)
-                .agg(pl.col("x_intercept").max().alias("x_intercept"))
-                .collect()
-            )
+#         if which == "last":
+#             return (
+#                 lf.group_by(group)
+#                 .agg(pl.col("x_intercept").max().alias("x_intercept"))
+#                 .collect()
+#             )
 
-        if which == "closest_to_zero":
-            return (
-                lf.group_by(group)
-                .agg(
-                    pl.col("x_intercept")
-                    .sort_by(pl.col("x_intercept").abs())
-                    .first()
-                    .alias("x_intercept")
-                )
-                .collect()
-            )
+#         if which == "closest_to_zero":
+#             return (
+#                 lf.group_by(group)
+#                 .agg(
+#                     pl.col("x_intercept")
+#                     .sort_by(pl.col("x_intercept").abs())
+#                     .first()
+#                     .alias("x_intercept")
+#                 )
+#                 .collect()
+#             )
 
-        raise ValueError(
-            "which must be one of: 'all', 'first', 'last', 'closest_to_zero'."
-        )
+#         raise ValueError(
+#             "which must be one of: 'all', 'first', 'last', 'closest_to_zero'."
+#         )
 
-    # define evaluation parameters
-    def get_linregress_params(
-        df: pl.DataFrame, x_name: str, y_name: str, with_columns: list
-    ) -> pl.DataFrame:
+#     # define evaluation parameters
+#     def get_linregress_params(
+#         df: pl.DataFrame, x_name: str, y_name: str, with_columns: list
+#     ) -> pl.DataFrame:
 
-        # sort data by x values for consistent results
-        df = df.sort(x_name)
+#         # sort data by x values for consistent results
+#         df = df.sort(x_name)
 
-        # linear regression: x vs y
-        if df.height > 2:
-            x_vals = df[x_name].to_numpy()
-            y_vals = df[y_name].to_numpy()
+#         # linear regression: x vs y
+#         if df.height > 2:
+#             x_vals = df[x_name].to_numpy()
+#             y_vals = df[y_name].to_numpy()
 
-            # perform linear regression
-            linregress_res = linregress(x_vals, y_vals)
-        else:
-            linregress_res = None
+#             # perform linear regression
+#             linregress_res = linregress(x_vals, y_vals)
+#         else:
+#             linregress_res = None
 
-        return pl.DataFrame(
-            {
-                "slope": [linregress_res.slope if linregress_res else None],
-                "intercept": [linregress_res.intercept if linregress_res else None],
-                "rvalue": [linregress_res.rvalue if linregress_res else None],
-                "pvalue": [linregress_res.pvalue if linregress_res else None],
-                "stderr": [linregress_res.stderr if linregress_res else None],
-            }
-        ).join(
-            df.select(with_columns).limit(1),
-            how="cross",
-        )
+#         return pl.DataFrame(
+#             {
+#                 "slope": [linregress_res.slope if linregress_res else None],
+#                 "intercept": [linregress_res.intercept if linregress_res else None],
+#                 "rvalue": [linregress_res.rvalue if linregress_res else None],
+#                 "pvalue": [linregress_res.pvalue if linregress_res else None],
+#                 "stderr": [linregress_res.stderr if linregress_res else None],
+#             }
+#         ).join(
+#             df.select(with_columns).limit(1),
+#             how="cross",
+#         )
 
-    return get_linregress_params, get_x_intercepts
+#     return get_linregress_params, get_x_intercepts
 
 
 @app.cell(hide_code=True)
