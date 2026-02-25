@@ -1334,48 +1334,51 @@ def _(polarisation_filtered_df):
         ]
     )
 
-    # downsample the data for better performance in the plot
-    # bin voltage to every 15 mV per half cycle and keep only keep median values within each voltage bin 
-    # to preserve the overall curve shape while reducing the number of points
-    _downsampled_chart_data = (
-        _chart_data.with_columns(
-            #build voltage bins and compute median of each bin per group
-            (pl.col("voltage/V") / 0.015).round().alias("voltage_bin"),
-        )
-        .with_columns(
-            pl.col("voltage/V").median().over([
+    # downsample the data for better performance in the plot to a maximum of 10000 points
+    n = 0
+    _downsampled_chart_data = pl.DataFrame()
+    while len(_downsampled_chart_data) < 10000:
+    
+        _downsampled_chart_data = (
+            _chart_data.with_columns(
+                #build voltage bins and compute median of each bin per group
+                (pl.col("voltage/V") / (pl.col("voltage/V").max() / n) * 1000).round().cast(pl.Int32).alias("voltage_bin"),
+            )
+            .with_columns(
+                pl.col("voltage/V").median().over([
+                    *_meta_cols, 
+                    "Ns", 
+                    "voltage_bin",
+                ]).alias("_v_med"),
+            )
+            .with_columns(
+                # compute distance to median voltage within each voltage bin 
+                # to keep the closest-to-median point for better curve representation after downsampling
+                (pl.col("voltage/V") - pl.col("_v_med")).abs().alias("_v_dist")
+            )
+            .sort([
                 *_meta_cols, 
                 "Ns", 
-                "voltage_bin",
-            ]).alias("_v_med"),
+                "voltage_bin", 
+                "_v_dist",
+            ])
+            .group_by([
+                *_meta_cols, 
+                "Ns", 
+                "voltage_bin"
+            ])
+            .agg(
+                pl.all().first()
+            )
+            .drop(["_v_med", "_v_dist", "voltage_bin"])
+            .sort([
+                *_meta_cols,
+                "Ns", 
+                "time/s"
+            ])
         )
-        .with_columns(
-            # compute distance to median voltage within each voltage bin 
-            # to keep the closest-to-median point for better curve representation after downsampling
-            (pl.col("voltage/V") - pl.col("_v_med")).abs().alias("_v_dist")
-        )
-        .sort([
-            *_meta_cols, 
-            "Ns", 
-            "voltage_bin", 
-            "_v_dist", 
-            "time/s"
-        ])
-        .group_by([
-            *_meta_cols, 
-            "Ns", 
-            "voltage_bin"
-        ])
-        .agg(
-            pl.all().first()
-        )
-        .drop(["_v_med", "_v_dist", "voltage_bin"])
-        .sort([
-            *_meta_cols,
-            "Ns", 
-            "time/s"
-        ])
-    )
+    
+        n += 1
 
     # create selectors and bind them to the legend
     _participant_selection = alt.selection_point(fields=["participant"], bind="legend")

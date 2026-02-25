@@ -1,68 +1,108 @@
-# marimo WebAssembly + GitHub Pages Template
+# International Flow Battery Reproducibility Study
 
-This template repository demonstrates how to export [marimo](https://marimo.io) notebooks to WebAssembly and deploy them to GitHub Pages.
+## FSU Data Dashboard
 
-## 📚 Included Examples
+This repository contains the data obtained by participants of the Friedrich Schiller University Jena from experiments performed during the international flow battery reproducibility study led by MIT and QUB. The data is evaluated with Python within an interactive Marimo notebook. 
 
-- `apps/charts.py`: Interactive data visualization with Altair
-- `notebooks/fibonacci.py`: Interactive Fibonacci sequence calculator
-- `notebooks/penguins.py`: Interactive data analysis with Polars and marimo
+## 🚀 Contributing data
 
-## 🚀 Usage
+Datasets can be contributed via Pull Request. The raw measurement files (BioLogic `*.mpr`) must follow a fixed directory layout so the automated precompute pipeline can process them.
 
-1. Fork this repository
-2. Add your marimo files to the `notebooks/` or `apps/` directory
-   1. `notebooks/` notebooks are exported with `--mode edit`
-   2. `apps/` notebooks are exported with `--mode run`
-3. Push to main branch
-4. Go to repository **Settings > Pages** and change the "Source" dropdown to "GitHub Actions"
-5. GitHub Actions will automatically build and deploy to Pages
+### Directory structure
 
-## Including data or assets
+Place your data under `apps/public/data/` using the following hierarchy:
 
-To include data or assets in your notebooks, add them to the `public/` directory.
-
-For example, the `apps/charts.py` notebook loads an image asset from the `public/` directory.
-
-```markdown
-<img src="public/logo.png" width="200" />
+```
+apps/public/data/
+  {study_phase}/                 # e.g. phase_2a, phase_2b
+    {participant}/               # your participant ID, e.g. P001
+      {repetition}/              # measurement repetition: 1, 2, 3, …
+        {flow_rate}/             # electrolyte flow rate in mL/min: 3.3, 8.3, 20.7, 25, …
+          {technique}/           # see naming convention below
+            *.mpr                # BioLogic raw data files
+    Temperature/                 # (optional) temperature log per study phase
+      DL-200T_temperature.csv    # CSV with columns: datetime, temperature_C
 ```
 
-And the `notebooks/penguins.py` notebook loads a CSV dataset from the `public/` directory.
+### Technique naming convention
 
-```python
-import polars as pl
-df = pl.read_csv(mo.notebook_location() / "public" / "penguins.csv")
-```
+Technique directories must use the following numbered prefixes so the precompute script can identify them:
 
-## 🎨 Templates
+| Directory name          | Description                  |
+|-------------------------|------------------------------|
+| `00 break-in`           | Break-in / conditioning      |
+| `01 eis`                | Electrochemical impedance    |
+| `02 polarisation`       | Polarisation curves          |
+| `03 charge-discharge`   | Charge–discharge cycling     |
+| `04 post-eis`           | Post-experiment EIS          |
+| `05 post-polarisation`  | Post-experiment polarisation |
 
-This repository includes several templates for the generated site:
+### Step-by-step
 
-1. `index.html.j2` (default): A template with styling and a footer
-2. `bare.html.j2`: A minimal template with basic styling
-3. `tailwind.html.j2`: A minimal and lean template using Tailwind CSS
+1. **Fork** this repository on GitHub.
+2. Clone your fork and create a new branch:
+   ```bash
+   git checkout -b data/{your-name}
+   ```
+3. Add your `*.mpr` files into the correct directory structure under `apps/public/data/`.
+4. Commit and push:
+   ```bash
+   git add apps/public/data/
+   git commit -m "data: add {your-name} measurements for {phase}"
+   git push origin data/{your-name}
+   ```
+5. Open a **Pull Request** against `main`.
 
-To use a specific template, pass the `--template` parameter to the build script:
+Once the PR is merged, a GitHub Action will automatically:
+1. Run the precompute script to extract the raw data into Parquet files.
+2. Rebuild and deploy the interactive dashboard to GitHub Pages.
+
+> **Note:** Directories containing `fail` in their name (e.g. `3-failed`) are automatically excluded from processing.
+
+## 🧪 Local Development
+
+### Prerequisites
+
+- **Python ≥ 3.12**
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** – a fast Python package manager
+
+### Setup
+
+Clone the repository and navigate into it:
 
 ```bash
-uv run .github/scripts/build.py --template templates/tailwind.html.j2
+git clone https://github.com/fsu-schubert-battery/marimo-notebooks.git
+cd marimo-notebooks
 ```
 
-You can also create your own custom templates. See the [templates/README.md](templates/README.md) for more information.
+No manual virtual environment or `pip install` is required – `uv` resolves all dependencies automatically from the inline PEP 723 metadata in each notebook.
 
-## 🧪 Testing
+### Running the dashboard locally
 
-To test the export process, run `.github/scripts/build.py` from the root directory.
+```bash
+uv run marimo run apps/ifbs_dashboard.py
+```
+
+This starts a local server (by default at `http://localhost:2718`) and opens the dashboard in your browser. The notebook's dependencies (`polars`, `scipy`, `altair`, etc.) are installed on the fly by `uv`.
+
+To edit the notebook interactively instead:
+
+```bash
+uv run marimo edit apps/ifbs_dashboard.py
+```
+
+### Building the static site
+
+To export all notebooks as a static HTML/WASM site (same as the GitHub Actions workflow):
 
 ```bash
 uv run .github/scripts/build.py
 ```
 
-This will export all notebooks in a folder called `_site/` in the root directory. Then to serve the site, run:
+This creates the `_site/` directory. Serve it locally with:
 
 ```bash
 python -m http.server -d _site
 ```
 
-This will serve the site at `http://localhost:8000`.
+Then open `http://localhost:8000`.
