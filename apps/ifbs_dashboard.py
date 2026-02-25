@@ -642,20 +642,6 @@ def _(temperature_data_df):
     # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
     # STEP 2a: Build an area chart to visualize the temperature data over time
 
-    if temperature_data_df.is_empty():
-        temperature_time_chart = (
-            alt.Chart(pl.DataFrame({"message": ["No temperature data available for the selected study phase."]}))
-            .mark_text(align="left", baseline="top")
-            .encode(
-                text="message:N",
-            )
-            .properties(
-                width=975,
-                height=150,
-            )
-        )
-        return (temperature_time_chart,)
-
     # domain for the temperature values
     _all_temperature = temperature_data_df["temperature/°C"]
     _temperature_domain = [_all_temperature.min() - 0.1, _all_temperature.max() + 0.1]
