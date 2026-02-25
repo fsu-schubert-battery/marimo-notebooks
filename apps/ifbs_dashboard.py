@@ -35,7 +35,6 @@ with app.setup:
     def is_wasm() -> bool:
         return sys.platform == "emscripten"
 
-
     # data handling
     import tempfile
     import json
@@ -51,10 +50,8 @@ with app.setup:
 
     if is_wasm():
         alt.data_transformers.enable("default")
-        md.version("Vegafusion not available, using default data transformer for Altair charts. ")
     else:
         alt.data_transformers.enable("vegafusion")
-        md.version("Using Vegafusion for data transformations in Altair charts")
 
 
 @app.cell(hide_code=True)
