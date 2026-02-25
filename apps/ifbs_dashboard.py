@@ -1038,114 +1038,114 @@ def _(
 #     return
 
 
-# @app.cell
-# def _(data_structure_df, load_file, load_precomputed_df):
-#     # IMPEDANCE SPECTROSCOPY EVALUATION
-#     # STEP 1a: Load ALL EIS files from the full data_structure_df into a single flat DataFrame.
-#     # Filtering by UI selectors is applied later at chart/computation time.
+@app.cell
+def _(data_structure_df, load_file, load_precomputed_df):
+    # IMPEDANCE SPECTROSCOPY EVALUATION
+    # STEP 1a: Load ALL EIS files from the full data_structure_df into a single flat DataFrame.
+    # Filtering by UI selectors is applied later at chart/computation time.
 
-#     if is_wasm():
-#         eis_flat_df = load_precomputed_df("eis_flat_df")
-#     else:
-#         # filter out impedance spectroscopy files from the full (unfiltered) structure
-#         _df_eis = data_structure_df.filter(pl.col("technique") == "01 eis")
+    if is_wasm():
+        eis_flat_df = load_precomputed_df("eis_flat_df")
+    else:
+        # filter out impedance spectroscopy files from the full (unfiltered) structure
+        _df_eis = data_structure_df.filter(pl.col("technique") == "01 eis")
 
-#         # load each file (cached via @mo.persistent_cache) and concatenate
-#         # into a single flat DataFrame with metadata columns
-#         _frames = []
-#         for _row in _df_eis.iter_rows(named=True):
-#             try:
-#                 _data = load_file(_row["file_path"], ["PEIS", "GEIS"])
-#             except Exception as e:
-#                 print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
-#                 continue
-#             if _data is not None:
-#                 # rename columns to have consistent naming across files
-#                 _data = _data.rename(
-#                     {
-#                         "cycle number": "cycle",
-#                     },
-#                     strict=False,
+        # load each file (cached via @mo.persistent_cache) and concatenate
+        # into a single flat DataFrame with metadata columns
+        _frames = []
+        for _row in _df_eis.iter_rows(named=True):
+            try:
+                _data = load_file(_row["file_path"], ["PEIS", "GEIS"])
+            except Exception as e:
+                print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
+                continue
+            if _data is not None:
+                # rename columns to have consistent naming across files
+                _data = _data.rename(
+                    {
+                        "cycle number": "cycle",
+                    },
+                    strict=False,
 
-#                 )
+                )
 
-#                 _frames.append(
-#                     _data.with_columns(
-#                         pl.lit(_row["study_phase"]).alias("study_phase"),
-#                         pl.lit(_row["participant"]).alias("participant"),
-#                         pl.lit(_row["repetition"]).alias("repetition"),
-#                         pl.lit(_row["flow_rate"]).alias("flow_rate"),
-#                         # shift study_phase, etc. to the leftmost position for easier access later on
-#                     ).select(
-#                         [
-#                             "study_phase",
-#                             "participant",
-#                             "repetition",
-#                             "flow_rate",
-#                             *[
-#                                 col
-#                                 for col in _data.columns
-#                                 if col
-#                                 not in [
-#                                     "study_phase",
-#                                     "participant",
-#                                     "repetition",
-#                                     "flow_rate",
-#                                 ]
-#                             ],
-#                         ]
-#                     )
-#                 )
+                _frames.append(
+                    _data.with_columns(
+                        pl.lit(_row["study_phase"]).alias("study_phase"),
+                        pl.lit(_row["participant"]).alias("participant"),
+                        pl.lit(_row["repetition"]).alias("repetition"),
+                        pl.lit(_row["flow_rate"]).alias("flow_rate"),
+                        # shift study_phase, etc. to the leftmost position for easier access later on
+                    ).select(
+                        [
+                            "study_phase",
+                            "participant",
+                            "repetition",
+                            "flow_rate",
+                            *[
+                                col
+                                for col in _data.columns
+                                if col
+                                not in [
+                                    "study_phase",
+                                    "participant",
+                                    "repetition",
+                                    "flow_rate",
+                                ]
+                            ],
+                        ]
+                    )
+                )
 
-#         eis_flat_df = (
-#             pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
-#         )
-#     return (eis_flat_df,)
+        eis_flat_df = (
+            pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
+        )
+    return (eis_flat_df,)
 
 
-# @app.cell
-# def _(
-#     eis_flat_df,
-#     flow_rate_selector,
-#     participant_selector,
-#     recalculate_time,
-#     repetition_selector,
-#     study_phase_selector,
-# ):
-#     # IMPEDANCE SPECTROSCOPY EVALUATION
-#     # STEP 1b: Filter the EIS data according to the UI selectors
+@app.cell
+def _(
+    eis_flat_df,
+    flow_rate_selector,
+    participant_selector,
+    recalculate_time,
+    repetition_selector,
+    study_phase_selector,
+):
+    # IMPEDANCE SPECTROSCOPY EVALUATION
+    # STEP 1b: Filter the EIS data according to the UI selectors
 
-#     # apply UI filter to the flat EIS DataFrame
-#     eis_filtered_df = eis_flat_df.filter(
-#         pl.col("study_phase").is_in([study_phase_selector.value])
-#         & pl.col("participant").is_in(participant_selector.value)
-#         & pl.col("repetition").is_in(repetition_selector.value)
-#         & pl.col("flow_rate").is_in(flow_rate_selector.value)
-#     )
-#     mo.stop(
-#         eis_filtered_df.is_empty(),
-#     )
+    # apply UI filter to the flat EIS DataFrame
+    eis_filtered_df = eis_flat_df.filter(
+        pl.col("study_phase").is_in([study_phase_selector.value])
+        & pl.col("participant").is_in(participant_selector.value)
+        & pl.col("repetition").is_in(repetition_selector.value)
+        & pl.col("flow_rate").is_in(flow_rate_selector.value)
+    )
+    mo.stop(
+        eis_filtered_df.is_empty(),
+    )
 
-#     # recalculate time/s from datetime column for each group (study_phase, participant, repetition, flow_rate)
-#     # NOTE: We do this to properly handle multiple files in one experiment folder and then keep only the last cycle in the next step
-#     eis_filtered_df = recalculate_time(eis_filtered_df)
+    # recalculate time/s from datetime column for each group (study_phase, participant, repetition, flow_rate)
+    # NOTE: We do this to properly handle multiple files in one experiment folder and then keep only the last cycle in the next step
+    eis_filtered_df = recalculate_time(eis_filtered_df)
 
-#     # keep only the last cycle of each group
-#     eis_filtered_df = (
+    # keep only the last cycle of each group
+    eis_filtered_df = (
 
-#         eis_filtered_df.with_columns(
-#             pl.col("cycle").max().over(
-#                 "study_phase", 
-#                 "participant", 
-#                 "repetition", 
-#                 "flow_rate"
-#             )
-#             .alias("max_cycle")
-#         ).filter(
-#             pl.col("cycle") == pl.col("max_cycle")
-#         ).drop("max_cycle")
-#     )
-#     return (eis_filtered_df,)
+        eis_filtered_df.with_columns(
+            pl.col("cycle").max().over(
+                "study_phase", 
+                "participant", 
+                "repetition", 
+                "flow_rate"
+            )
+            .alias("max_cycle")
+        ).filter(
+            pl.col("cycle") == pl.col("max_cycle")
+        ).drop("max_cycle")
+    )
+    return (eis_filtered_df,)
 
 
 # @app.cell
@@ -1510,99 +1510,99 @@ def _(
 #     return
 
 
-# @app.cell
-# def _(data_structure_df, load_file, load_precomputed_df):
-#     # POLARISATION DATA EVALUATION
-#     # STEP 1a: Load ALL polarisation files from the full data_structure_df into a single flat DataFrame.
+@app.cell
+def _(data_structure_df, load_file, load_precomputed_df):
+    # POLARISATION DATA EVALUATION
+    # STEP 1a: Load ALL polarisation files from the full data_structure_df into a single flat DataFrame.
 
-#     if is_wasm():
-#         polarisation_flat_df = load_precomputed_df("polarisation_flat_df")
-#     else:
-#         # filter out polarisation files from the full (unfiltered) structure
-#         _df_pol = data_structure_df.filter(pl.col("technique") == "02 polarisation")
+    if is_wasm():
+        polarisation_flat_df = load_precomputed_df("polarisation_flat_df")
+    else:
+        # filter out polarisation files from the full (unfiltered) structure
+        _df_pol = data_structure_df.filter(pl.col("technique") == "02 polarisation")
 
-#         # load each file (cached per file via @mo.persistent_cache) and concatenate
-#         # into a single flat DataFrame with metadata columns
-#         _frames = []
-#         for _row in _df_pol.iter_rows(named=True):
-#             try:
-#                 _data = load_file(_row["file_path"], ["CP"])    
-#             except Exception as e:
-#                 print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
-#                 continue
-#             if _data is not None:
-#                 # rename current and voltage columns
-#                 _data = _data.rename(
-#                     {
-#                         "<I>/mA": "current/mA",
-#                         "I/mA": "current/mA",
-#                         "<Ewe>/V": "voltage/V",
-#                         "Ewe/V": "voltage/V",
-#                         "cycle number": "cycle",
-#                     },
-#                     strict=False,
-#                 )
-#                 _frames.append(
-#                     _data.with_columns(
-#                         pl.lit(_row["study_phase"]).alias("study_phase"),
-#                         pl.lit(_row["participant"]).alias("participant"),
-#                         pl.lit(_row["repetition"]).alias("repetition"),
-#                         pl.lit(_row["flow_rate"]).alias("flow_rate"),
-#                         # shift study_phase, etc. to the leftmost position for easier access later on
-#                     ).select(
-#                         [
-#                             "study_phase",
-#                             "participant",
-#                             "repetition",
-#                             "flow_rate",
-#                             *[
-#                                 col
-#                                 for col in _data.columns
-#                                 if col
-#                                 not in [
-#                                     "study_phase",
-#                                     "participant",
-#                                     "repetition",
-#                                     "flow_rate",
-#                                 ]
-#                             ],
-#                         ]
-#                     )
-#                 )
+        # load each file (cached per file via @mo.persistent_cache) and concatenate
+        # into a single flat DataFrame with metadata columns
+        _frames = []
+        for _row in _df_pol.iter_rows(named=True):
+            try:
+                _data = load_file(_row["file_path"], ["CP"])    
+            except Exception as e:
+                print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
+                continue
+            if _data is not None:
+                # rename current and voltage columns
+                _data = _data.rename(
+                    {
+                        "<I>/mA": "current/mA",
+                        "I/mA": "current/mA",
+                        "<Ewe>/V": "voltage/V",
+                        "Ewe/V": "voltage/V",
+                        "cycle number": "cycle",
+                    },
+                    strict=False,
+                )
+                _frames.append(
+                    _data.with_columns(
+                        pl.lit(_row["study_phase"]).alias("study_phase"),
+                        pl.lit(_row["participant"]).alias("participant"),
+                        pl.lit(_row["repetition"]).alias("repetition"),
+                        pl.lit(_row["flow_rate"]).alias("flow_rate"),
+                        # shift study_phase, etc. to the leftmost position for easier access later on
+                    ).select(
+                        [
+                            "study_phase",
+                            "participant",
+                            "repetition",
+                            "flow_rate",
+                            *[
+                                col
+                                for col in _data.columns
+                                if col
+                                not in [
+                                    "study_phase",
+                                    "participant",
+                                    "repetition",
+                                    "flow_rate",
+                                ]
+                            ],
+                        ]
+                    )
+                )
 
-#         polarisation_flat_df = (
-#             pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
-#         )
-#     return (polarisation_flat_df,)
+        polarisation_flat_df = (
+            pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
+        )
+    return (polarisation_flat_df,)
 
 
-# @app.cell
-# def _(
-#     flow_rate_selector,
-#     participant_selector,
-#     polarisation_flat_df,
-#     recalculate_time,
-#     repetition_selector,
-#     study_phase_selector,
-# ):
-#     # POLARISATION DATA EVALUATION
-#     # STEP 1b: Filter the polarisation data according to the UI selectors
+@app.cell
+def _(
+    flow_rate_selector,
+    participant_selector,
+    polarisation_flat_df,
+    recalculate_time,
+    repetition_selector,
+    study_phase_selector,
+):
+    # POLARISATION DATA EVALUATION
+    # STEP 1b: Filter the polarisation data according to the UI selectors
 
-#     # apply UI filter
-#     polarisation_filtered_df = polarisation_flat_df.filter(
-#         pl.col("study_phase").is_in([study_phase_selector.value])
-#         & pl.col("participant").is_in(participant_selector.value)
-#         & pl.col("repetition").is_in(repetition_selector.value)
-#         & pl.col("flow_rate").is_in(flow_rate_selector.value)
-#     )
-#     mo.stop(
-#         polarisation_filtered_df.is_empty(),
-#     )
+    # apply UI filter
+    polarisation_filtered_df = polarisation_flat_df.filter(
+        pl.col("study_phase").is_in([study_phase_selector.value])
+        & pl.col("participant").is_in(participant_selector.value)
+        & pl.col("repetition").is_in(repetition_selector.value)
+        & pl.col("flow_rate").is_in(flow_rate_selector.value)
+    )
+    mo.stop(
+        polarisation_filtered_df.is_empty(),
+    )
 
-#     # recalculate time/s from datetime column for each group (study_phase, participant, repetition, flow_rate)
-#     # NOTE: We do this to properly handle multiple files in one experiment folder
-#     polarisation_filtered_df = recalculate_time(polarisation_filtered_df)
-#     return (polarisation_filtered_df,)
+    # recalculate time/s from datetime column for each group (study_phase, participant, repetition, flow_rate)
+    # NOTE: We do this to properly handle multiple files in one experiment folder
+    polarisation_filtered_df = recalculate_time(polarisation_filtered_df)
+    return (polarisation_filtered_df,)
 
 
 # @app.cell
@@ -2089,106 +2089,106 @@ def _(
 #     return
 
 
-# @app.cell
-# def _(data_structure_df, load_file, load_precomputed_df):
-#     # CHARGE-DISCHARGE CYCLING EVALUATION
-#     # STEP 1a: Load ALL charge-discharge files from the full data_structure_df into a single flat DataFrame.
-#     # Filtering by UI selectors is applied later at chart/computation time.
+@app.cell
+def _(data_structure_df, load_file, load_precomputed_df):
+    # CHARGE-DISCHARGE CYCLING EVALUATION
+    # STEP 1a: Load ALL charge-discharge files from the full data_structure_df into a single flat DataFrame.
+    # Filtering by UI selectors is applied later at chart/computation time.
 
-#     if is_wasm():
-#         cd_cycling_flat_df = load_precomputed_df("cd_cycling_flat_df")
-#     else:
-#         # filter out charge-discharge files from the full (unfiltered) structure
-#         _df_cd = data_structure_df.filter(pl.col("technique") == "03 charge-discharge")
+    if is_wasm():
+        cd_cycling_flat_df = load_precomputed_df("cd_cycling_flat_df")
+    else:
+        # filter out charge-discharge files from the full (unfiltered) structure
+        _df_cd = data_structure_df.filter(pl.col("technique") == "03 charge-discharge")
 
-#         # load each file (cached per file via @mo.persistent_cache) and concatenate
-#         # into a single flat DataFrame with metadata columns
-#         _frames = []
-#         for _row in _df_cd.iter_rows(named=True):
-#             try:
-#                 _data = load_file(_row["file_path"], ["GCPL"])    
-#             except Exception as e:
-#                 print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
-#                 continue
-#             if _data is not None:
-#                 # rename current and voltage columns
-#                 _data = _data.rename(
-#                     {
-#                         "<I>/mA": "current/mA",
-#                         "I/mA": "current/mA",
-#                         "<Ewe>/V": "voltage/V",
-#                         "Ewe/V": "voltage/V",
-#                     },
-#                     strict=False,
-#                 )
+        # load each file (cached per file via @mo.persistent_cache) and concatenate
+        # into a single flat DataFrame with metadata columns
+        _frames = []
+        for _row in _df_cd.iter_rows(named=True):
+            try:
+                _data = load_file(_row["file_path"], ["GCPL"])    
+            except Exception as e:
+                print(ValueError(f"Failed to load MPR file {_row["file_path"]}: {e}"))
+                continue
+            if _data is not None:
+                # rename current and voltage columns
+                _data = _data.rename(
+                    {
+                        "<I>/mA": "current/mA",
+                        "I/mA": "current/mA",
+                        "<Ewe>/V": "voltage/V",
+                        "Ewe/V": "voltage/V",
+                    },
+                    strict=False,
+                )
 
-#                 # if no current column is found, try to extract it from the time and capacity columns
-#                 if "current/mA" not in _data.columns and "dq/mA.h" in _data.columns:
-#                     # compute current from capacity and time (I = dQ/dt)
-#                     _data = _data.with_columns(
-#                         (
-#                             pl.col("dq/mA.h").diff().fill_null(0)
-#                             / pl.col("time/s").diff().fill_null(1)
-#                             * 3600
-#                         ).alias("current/mA")
-#                     )
+                # if no current column is found, try to extract it from the time and capacity columns
+                if "current/mA" not in _data.columns and "dq/mA.h" in _data.columns:
+                    # compute current from capacity and time (I = dQ/dt)
+                    _data = _data.with_columns(
+                        (
+                            pl.col("dq/mA.h").diff().fill_null(0)
+                            / pl.col("time/s").diff().fill_null(1)
+                            * 3600
+                        ).alias("current/mA")
+                    )
 
-#                 _frames.append(
-#                     _data.with_columns(
-#                         pl.lit(_row["study_phase"]).alias("study_phase"),
-#                         pl.lit(_row["participant"]).alias("participant"),
-#                         pl.lit(_row["repetition"]).alias("repetition"),
-#                         pl.lit(_row["flow_rate"]).alias("flow_rate"),
-#                         # shift study_phase, etc. to the leftmost position for easier access later on
-#                     ).select(
-#                         [
-#                             "study_phase",
-#                             "participant",
-#                             "repetition",
-#                             "flow_rate",
-#                             *[
-#                                 col
-#                                 for col in _data.columns
-#                                 if col
-#                                 not in [
-#                                     "study_phase",
-#                                     "participant",
-#                                     "repetition",
-#                                     "flow_rate",
-#                                 ]
-#                             ],
-#                         ]
-#                     )
-#                 )
+                _frames.append(
+                    _data.with_columns(
+                        pl.lit(_row["study_phase"]).alias("study_phase"),
+                        pl.lit(_row["participant"]).alias("participant"),
+                        pl.lit(_row["repetition"]).alias("repetition"),
+                        pl.lit(_row["flow_rate"]).alias("flow_rate"),
+                        # shift study_phase, etc. to the leftmost position for easier access later on
+                    ).select(
+                        [
+                            "study_phase",
+                            "participant",
+                            "repetition",
+                            "flow_rate",
+                            *[
+                                col
+                                for col in _data.columns
+                                if col
+                                not in [
+                                    "study_phase",
+                                    "participant",
+                                    "repetition",
+                                    "flow_rate",
+                                ]
+                            ],
+                        ]
+                    )
+                )
 
-#         cd_cycling_flat_df = (
-#             pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
-#         )
-#     return (cd_cycling_flat_df,)
+        cd_cycling_flat_df = (
+            pl.concat(_frames, how="vertical_relaxed") if _frames else pl.DataFrame()
+        )
+    return (cd_cycling_flat_df,)
 
 
-# @app.cell
-# def _(
-#     cd_cycling_flat_df,
-#     flow_rate_selector,
-#     participant_selector,
-#     repetition_selector,
-#     study_phase_selector,
-# ):
-#     # CHARGE-DISCHARGE CYCLING EVALUATION
-#     # STEP 1b: Filter the charge-discharge data according to the UI selectors
+@app.cell
+def _(
+    cd_cycling_flat_df,
+    flow_rate_selector,
+    participant_selector,
+    repetition_selector,
+    study_phase_selector,
+):
+    # CHARGE-DISCHARGE CYCLING EVALUATION
+    # STEP 1b: Filter the charge-discharge data according to the UI selectors
 
-#     # apply UI filter
-#     cd_cycling_filtered_df = cd_cycling_flat_df.filter(
-#         pl.col("study_phase").is_in([study_phase_selector.value])
-#         & pl.col("participant").is_in(participant_selector.value)
-#         & pl.col("repetition").is_in(repetition_selector.value)
-#         & pl.col("flow_rate").is_in(flow_rate_selector.value)
-#     )
-#     mo.stop(
-#         cd_cycling_filtered_df.is_empty(),
-#     )
-#     return (cd_cycling_filtered_df,)
+    # apply UI filter
+    cd_cycling_filtered_df = cd_cycling_flat_df.filter(
+        pl.col("study_phase").is_in([study_phase_selector.value])
+        & pl.col("participant").is_in(participant_selector.value)
+        & pl.col("repetition").is_in(repetition_selector.value)
+        & pl.col("flow_rate").is_in(flow_rate_selector.value)
+    )
+    mo.stop(
+        cd_cycling_filtered_df.is_empty(),
+    )
+    return (cd_cycling_filtered_df,)
 
 
 # @app.cell
