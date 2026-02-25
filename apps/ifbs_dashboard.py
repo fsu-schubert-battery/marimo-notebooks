@@ -1776,7 +1776,7 @@ def section_polarisation(
                 These plots show the relationship between the current and the overvoltage (i.e., applied voltage - OCV) for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as activation losses, ohmic losses, and mass transport limitations. You can compare the curves across different participants and repetitions to identify trends or differences in the polarisation behavior.
             """),
             mo.md("<br>"),
-            polarisation_plots,
+            # polarisation_plots,
             polarisation_voltage_current_plots,
             mo.md("<br>"),
             mo.md("### Polarisation resistance comparison"),
