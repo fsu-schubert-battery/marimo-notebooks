@@ -856,7 +856,7 @@ def _(combined_temperature_chart, temperature_data_df):
             mo.accordion(
                 {
                     "Data table": temperature_data_df,
-                    "Data explorer": mo.ui.data_explorer(temperature_data_df),
+                    # "Data explorer": mo.ui.data_explorer(temperature_data_df),
                 },
                 lazy=True,
                 multiple=True,
@@ -1253,7 +1253,7 @@ def section_impedance_spectroscopy(
             mo.accordion(
                 {
                     "Data table": mo.ui.dataframe(eis_filtered_df),
-                    "Data explorer": mo.ui.data_explorer(eis_filtered_df),
+                    # "Data explorer": mo.ui.data_explorer(eis_filtered_df),
                 },
                 lazy=True,
                 multiple=True,
@@ -1765,7 +1765,7 @@ def section_polarisation(
             mo.accordion(
                 {
                     "Data table": polarisation_filtered_df,
-                    "Data explorer": mo.ui.data_explorer(polarisation_filtered_df),
+                    # "Data explorer": mo.ui.data_explorer(polarisation_filtered_df),
                 },
                 lazy=True,
                 multiple=True,
@@ -2530,7 +2530,7 @@ def section_charge_discharge_cycling(
             mo.accordion(
                 {
                     "Data table": cd_cycling_filtered_df,
-                    "Data explorer": mo.ui.data_explorer(cd_cycling_filtered_df),
+                    # "Data explorer": mo.ui.data_explorer(cd_cycling_filtered_df),
                 },
                 lazy=True,
                 multiple=True,
