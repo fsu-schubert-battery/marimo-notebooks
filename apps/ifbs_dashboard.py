@@ -2580,15 +2580,12 @@ def section_charge_discharge_cycling(
             mo.md("""
                 These plots show the relationship between the voltage and the capacity for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as the presence of different plateaus corresponding to different electrochemical reactions, changes in internal resistance, and capacity fade over cycles. You can compare the curves across different participants and repetitions to identify trends or differences in the charge-discharge behavior. Use the slider to select the cycle to display.
             """),
-            mo.lazy(
-                mo.vstack(
-                    [
-                        mo.md("**Select cycle:**"),
-                        slider_half_cycle,
-                        cd_cycling_charts,
-                    ]
-                ),
-                show_loading_indicator=True,
+            mo.vstack(
+                [
+                    mo.md("**Select cycle:**"),
+                    slider_half_cycle,
+                    mo.lazy(cd_cycling_charts, show_loading_indicator=True),
+                ]
             ),
             mo.md("<br>"),
             mo.md("### Capacity distribution per participant and repetition"),
