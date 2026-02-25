@@ -1,4 +1,4 @@
-name: Precompute IFBS Parquet
+name: Precompute study data (*.pq)
 
 on:
   push:

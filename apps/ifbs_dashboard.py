@@ -859,8 +859,8 @@ def _(combined_temperature_chart, temperature_data_df):
             """),
             mo.accordion(
                 {
-                    "Data table": mo.lazy(temperature_data_df, show_loading_indicator=True),
-                    "Data explorer": mo.lazy(mo.ui.data_explorer(temperature_data_df), show_loading_indicator=True),
+                    "Data table": temperature_data_df,
+                    # "Data explorer": mo.ui.data_explorer(temperature_data_df),
                 },
                 lazy=True,
                 multiple=True,
@@ -1250,8 +1250,8 @@ def section_impedance_spectroscopy(
             """),
             mo.accordion(
                 {
-                    "Data table": mo.lazy(mo.ui.dataframe(eis_filtered_df), show_loading_indicator=True),
-                    # "Data explorer": mo.lazy(mo.ui.data_explorer(eis_filtered_df), show_loading_indicator=True),
+                    "Data table": mo.ui.dataframe(eis_filtered_df),
+                    # "Data explorer": mo.ui.data_explorer(eis_filtered_df),
                 },
                 lazy=True,
                 multiple=True,
@@ -1793,8 +1793,8 @@ def section_polarisation(
             """),
             mo.accordion(
                 {
-                    "Data table": mo.lazy(polarisation_filtered_df, show_loading_indicator=True),
-                    # "Data explorer": mo.lazy(mo.ui.data_explorer(polarisation_filtered_df), show_loading_indicator=True),
+                    "Data table": polarisation_filtered_df,
+                    # "Data explorer": mo.ui.data_explorer(polarisation_filtered_df),
                 },
                 lazy=True,
                 multiple=True,
@@ -2561,8 +2561,8 @@ def section_charge_discharge_cycling(
             """),
             mo.accordion(
                 {
-                    "Data table": mo.lazy(cd_cycling_filtered_df, show_loading_indicator=True),
-                    # "Data explorer": mo.lazy(mo.ui.data_explorer(cd_cycling_filtered_df), show_loading_indicator=True),
+                    "Data table": cd_cycling_filtered_df,
+                    # "Data explorer": mo.ui.data_explorer(cd_cycling_filtered_df),
                 },
                 lazy=True,
                 multiple=True,
