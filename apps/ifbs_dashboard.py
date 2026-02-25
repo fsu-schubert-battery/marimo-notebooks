@@ -714,169 +714,169 @@ def _(temperature_data_df):
             height=150,
         )
     )
-    temperature_time_chart
+
     return (temperature_time_chart,)
 
 
-# @app.cell
-# def _(
-#     cd_cycling_filtered_df,
-#     eis_filtered_df,
-#     flow_rate_selector,
-#     participant_selector,
-#     polarisation_filtered_df,
-#     repetition_selector,
-#     study_phase_selector,
-#     temperature_time_chart,
-#     wheel_zoom_x,
-#     wheel_zoom_xy,
-#     wheel_zoom_y,
-# ):
-#     # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
-#     # STEP 2b: Build a Gantt chart showing the experiment time ranges for each participant and experiment technique, and overlay it with the temperature data
+@app.cell
+def _(
+    cd_cycling_filtered_df,
+    eis_filtered_df,
+    flow_rate_selector,
+    participant_selector,
+    polarisation_filtered_df,
+    repetition_selector,
+    study_phase_selector,
+    temperature_time_chart,
+    wheel_zoom_x,
+    wheel_zoom_xy,
+    wheel_zoom_y,
+):
+    # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
+    # STEP 2b: Build a Gantt chart showing the experiment time ranges for each participant and experiment technique, and overlay it with the temperature data
 
-#     # create a dataframe containing the start times of the first experiment of a participant and the end time of the last experiment of a participant (within a study phase) over all repetitions for each of the experiment phases (Impedance, Polarisation, Charge-discharge cycling)). The dataframe should have columns (study_phase, participant, technique, start_time/s, end_time/s), where technique is the experiment technique.
-#     def _ranges(df, typ):
-#         return (
-#             df.filter(
-#                 pl.col("study_phase").is_in([study_phase_selector.value])
-#                 & pl.col("participant").is_in(participant_selector.value)
-#                 & pl.col("repetition").is_in(repetition_selector.value)
-#                 & pl.col("flow_rate").is_in(flow_rate_selector.value)
-#             )
-#             .group_by(
-#                 "study_phase", 
-#                 "participant",
-#                 "repetition",
-#             ).agg(
-#                 pl.col("datetime").min().alias("start_datetime"),
-#                 pl.col("datetime").max().alias("end_datetime"),
-#             )
-#             .with_columns(
-#                 pl.lit(typ).alias("technique")
-#             )
-#             .select(
-#                 "study_phase",
-#                 "participant",
-#                 "repetition",
-#                 "technique",
-#                 pl.col("start_datetime").cast(pl.Datetime),
-#                 pl.col("end_datetime").cast(pl.Datetime),
-#             )
-#         )
+    # create a dataframe containing the start times of the first experiment of a participant and the end time of the last experiment of a participant (within a study phase) over all repetitions for each of the experiment phases (Impedance, Polarisation, Charge-discharge cycling)). The dataframe should have columns (study_phase, participant, technique, start_time/s, end_time/s), where technique is the experiment technique.
+    def _ranges(df, typ):
+        return (
+            df.filter(
+                pl.col("study_phase").is_in([study_phase_selector.value])
+                & pl.col("participant").is_in(participant_selector.value)
+                & pl.col("repetition").is_in(repetition_selector.value)
+                & pl.col("flow_rate").is_in(flow_rate_selector.value)
+            )
+            .group_by(
+                "study_phase", 
+                "participant",
+                "repetition",
+            ).agg(
+                pl.col("datetime").min().alias("start_datetime"),
+                pl.col("datetime").max().alias("end_datetime"),
+            )
+            .with_columns(
+                pl.lit(typ).alias("technique")
+            )
+            .select(
+                "study_phase",
+                "participant",
+                "repetition",
+                "technique",
+                pl.col("start_datetime").cast(pl.Datetime),
+                pl.col("end_datetime").cast(pl.Datetime),
+            )
+        )
 
-#     _experiment_schedules = (
-#         pl.DataFrame(schema={
-#             "study_phase": pl.String,
-#             "participant": pl.String,
-#             "repetition": pl.Int32,
-#             "technique": pl.String,
-#             "start_datetime": pl.Datetime,
-#             "end_datetime": pl.Datetime,
-#         })
-#         .vstack(_ranges(eis_filtered_df, "Impedance"))
-#         .vstack(_ranges(polarisation_filtered_df, "Polarisation"))
-#         .vstack(_ranges(cd_cycling_filtered_df, "Charge-discharge"))
-#         .sort(["study_phase", "start_datetime"])
-#     )
+    _experiment_schedules = (
+        pl.DataFrame(schema={
+            "study_phase": pl.String,
+            "participant": pl.String,
+            "repetition": pl.Int32,
+            "technique": pl.String,
+            "start_datetime": pl.Datetime,
+            "end_datetime": pl.Datetime,
+        })
+        .vstack(_ranges(eis_filtered_df, "Impedance"))
+        .vstack(_ranges(polarisation_filtered_df, "Polarisation"))
+        .vstack(_ranges(cd_cycling_filtered_df, "Charge-discharge"))
+        .sort(["study_phase", "start_datetime"])
+    )
 
-#     # create a Gantt chart visualizing the experiment time ranges for each participant and experiment technique, with the x-axis showing the time in days and the y-axis showing the participant. The bars should be colored by experiment technique and have tooltips showing the study phase, participant, experiment technique, start time, and end time.
-#     experiment_schedule_chart = (
-#         alt.Chart(_experiment_schedules)
-#         .mark_bar()
-#         .encode(
-#             x=alt.X("start_datetime:T", title=""),
-#             x2="end_datetime:T",
-#             y=alt.Y("participant:N", title=""),
-#             yOffset=alt.YOffset("technique:N", sort=["01 impedance", "02 polarisation", "03 charge-discharge"]),
-#             color=alt.Color("technique:N", title="Technique"),
-#             tooltip=[
-#                 "study_phase:N",
-#                 "participant:N",
-#                 "technique:N",
-#                 alt.Tooltip("start_datetime:T", title="Start time"),
-#                 alt.Tooltip("end_datetime:T", title="End time"),
-#             ],
-#         )
-#         .properties(
-#             width=975,
-#             height=150,
-#         )
-#     )
+    # create a Gantt chart visualizing the experiment time ranges for each participant and experiment technique, with the x-axis showing the time in days and the y-axis showing the participant. The bars should be colored by experiment technique and have tooltips showing the study phase, participant, experiment technique, start time, and end time.
+    experiment_schedule_chart = (
+        alt.Chart(_experiment_schedules)
+        .mark_bar()
+        .encode(
+            x=alt.X("start_datetime:T", title=""),
+            x2="end_datetime:T",
+            y=alt.Y("participant:N", title=""),
+            yOffset=alt.YOffset("technique:N", sort=["01 impedance", "02 polarisation", "03 charge-discharge"]),
+            color=alt.Color("technique:N", title="Technique"),
+            tooltip=[
+                "study_phase:N",
+                "participant:N",
+                "technique:N",
+                alt.Tooltip("start_datetime:T", title="Start time"),
+                alt.Tooltip("end_datetime:T", title="End time"),
+            ],
+        )
+        .properties(
+            width=975,
+            height=150,
+        )
+    )
 
-#     # create a combined chart overlaying the temperature data on the experiment schedule chart
-#     combined_temperature_chart = (
-#         alt.vconcat(
-#             experiment_schedule_chart,
-#             temperature_time_chart,
-#         )
-#         .resolve_scale(x="shared")
-#         .properties(
-#             title=alt.TitleParams(
-#                 text="Figure 13. Experiment time ranges with temperature data",
-#                 subtitle=[
-#                     "Combined Gantt chart and line chart visualizing the experiment schedules per participant, along with the temperature data over time. The Gantt chart displays the time ranges of the different", 
-#                     "techniques: Impedance spectroscopy (orange), polarisation (red), and charge-discharge cycling (blue) for each participant. while the line chart shows the temperature data over time.The x-axis", 
-#                     " is shared between the two charts to allow for easy comparison of the experiment schedules with the temperature data.",
-#                 ],
-#                 anchor="start",
-#                 orient="top",
-#                 offset=20,
-#             )
-#         )
-#         .interactive()
-#         .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
-#         .configure_legend(
-#             title=None,
-#             orient="top",
-#             direction='horizontal',
-#             disable=True,
-#         )
-#     )
-#     combined_temperature_chart
-#     return (combined_temperature_chart,)
+    # create a combined chart overlaying the temperature data on the experiment schedule chart
+    combined_temperature_chart = (
+        alt.vconcat(
+            experiment_schedule_chart,
+            temperature_time_chart,
+        )
+        .resolve_scale(x="shared")
+        .properties(
+            title=alt.TitleParams(
+                text="Figure 13. Experiment time ranges with temperature data",
+                subtitle=[
+                    "Combined Gantt chart and line chart visualizing the experiment schedules per participant, along with the temperature data over time. The Gantt chart displays the time ranges of the different", 
+                    "techniques: Impedance spectroscopy (orange), polarisation (red), and charge-discharge cycling (blue) for each participant. while the line chart shows the temperature data over time.The x-axis", 
+                    " is shared between the two charts to allow for easy comparison of the experiment schedules with the temperature data.",
+                ],
+                anchor="start",
+                orient="top",
+                offset=20,
+            )
+        )
+        .interactive()
+        .add_params(wheel_zoom_xy, wheel_zoom_x, wheel_zoom_y)
+        .configure_legend(
+            title=None,
+            orient="top",
+            direction='horizontal',
+            disable=True,
+        )
+    )
+    combined_temperature_chart
+    return (combined_temperature_chart,)
 
 
-# @app.cell
-# def _(combined_temperature_chart, temperature_data_df):
-#     # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
-#     # STEP 3: Display the content of the section and explain what it does
+@app.cell
+def _(combined_temperature_chart, temperature_data_df):
+    # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
+    # STEP 3: Display the content of the section and explain what it does
 
-#     mo.vstack(
-#         [
-#             mo.md("## Participant schedules and temperature data"),
-#             mo.md("""
-#                 This section displays the participant schedules and the temperature data recorded during the experiments. It was recorded by a Voltcraft DL-200T temperature logger at a sampling rate of one measurement every 60 s. The sensor was positioned at a central spot on a shelf within the laboratory (approximately 1 – 1.5 m away from each of the RFB experiments).
-#             """),
-#             mo.md("<br>"),
-#             mo.md("### Raw data exploration"),
-#             mo.md("""
-#                 The expandable sections enables you to explore the raw temperature data in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
-#             """),
-#             mo.accordion(
-#                 {
-#                     "Data table": temperature_data_df,
-#                     "Data explorer": mo.ui.data_explorer(temperature_data_df),
-#                 },
-#                 lazy=True,
-#                 multiple=True,
-#             ),
-#             mo.md("<br>"),
-#             mo.md("### Participant schedules and temperature over time"),
-#             mo.md(
-#                 f"""
-#                 The plot shows the participant schedules and the temperature data over time. You can use this plot to analyze the temperature behavior during the experiments and identify trends or differences between different time periods. The **average temperature** over the recorded time period was **{temperature_data_df["temperature/°C"].mean():.1f} °C ± {(temperature_data_df["temperature/°C"].std() if len(temperature_data_df) > 1 else 0):.1f} °C** (uncertainty: standard deviation) with a **minimum temperature of {temperature_data_df["temperature/°C"].min()} °C** and **maximum temperature of {temperature_data_df["temperature/°C"].max()} °C**.
-#                 """
-#             )
-#             if not temperature_data_df.is_empty()
-#             else mo.md(
-#                 "No temperature data is currently available for the selected study phase."
-#             ),
-#             mo.md("<br>"),
-#             combined_temperature_chart,
-#         ]
-#     )
-#     return
+    mo.vstack(
+        [
+            mo.md("## Participant schedules and temperature data"),
+            mo.md("""
+                This section displays the participant schedules and the temperature data recorded during the experiments. It was recorded by a Voltcraft DL-200T temperature logger at a sampling rate of one measurement every 60 s. The sensor was positioned at a central spot on a shelf within the laboratory (approximately 1 – 1.5 m away from each of the RFB experiments).
+            """),
+            mo.md("<br>"),
+            mo.md("### Raw data exploration"),
+            mo.md("""
+                The expandable sections enables you to explore the raw temperature data in more detail. You can view the data in a tabular format and apply filter and custom computations or use the interactive data explorer to filter, sort, and visualize the data as needed. While the functions are limited, it may help you gain a better understanding of the underlying data beyond the prepared visualizations below.
+            """),
+            mo.accordion(
+                {
+                    "Data table": temperature_data_df,
+                    "Data explorer": mo.ui.data_explorer(temperature_data_df),
+                },
+                lazy=True,
+                multiple=True,
+            ),
+            mo.md("<br>"),
+            mo.md("### Participant schedules and temperature over time"),
+            mo.md(
+                f"""
+                The plot shows the participant schedules and the temperature data over time. You can use this plot to analyze the temperature behavior during the experiments and identify trends or differences between different time periods. The **average temperature** over the recorded time period was **{temperature_data_df["temperature/°C"].mean():.1f} °C ± {(temperature_data_df["temperature/°C"].std() if len(temperature_data_df) > 1 else 0):.1f} °C** (uncertainty: standard deviation) with a **minimum temperature of {temperature_data_df["temperature/°C"].min()} °C** and **maximum temperature of {temperature_data_df["temperature/°C"].max()} °C**.
+                """
+            )
+            if not temperature_data_df.is_empty()
+            else mo.md(
+                "No temperature data is currently available for the selected study phase."
+            ),
+            mo.md("<br>"),
+            combined_temperature_chart,
+        ]
+    )
+    return
 
 @app.cell
 def _(
@@ -1285,33 +1285,33 @@ def _(
 #     return
 
 
-# @app.cell
-# def _(
-#     flow_rate_selector,
-#     participant_selector,
-#     polarisation_flat_df,
-#     recalculate_time,
-#     repetition_selector,
-#     study_phase_selector,
-# ):
-#     # POLARISATION DATA EVALUATION
-#     # STEP 1b: Filter the polarisation data according to the UI selectors
+@app.cell
+def _(
+    flow_rate_selector,
+    participant_selector,
+    polarisation_flat_df,
+    recalculate_time,
+    repetition_selector,
+    study_phase_selector,
+):
+    # POLARISATION DATA EVALUATION
+    # STEP 1b: Filter the polarisation data according to the UI selectors
 
-#     # apply UI filter
-#     polarisation_filtered_df = polarisation_flat_df.filter(
-#         pl.col("study_phase").is_in([study_phase_selector.value])
-#         & pl.col("participant").is_in(participant_selector.value)
-#         & pl.col("repetition").is_in(repetition_selector.value)
-#         & pl.col("flow_rate").is_in(flow_rate_selector.value)
-#     )
-#     mo.stop(
-#         polarisation_filtered_df.is_empty(),
-#     )
+    # apply UI filter
+    polarisation_filtered_df = polarisation_flat_df.filter(
+        pl.col("study_phase").is_in([study_phase_selector.value])
+        & pl.col("participant").is_in(participant_selector.value)
+        & pl.col("repetition").is_in(repetition_selector.value)
+        & pl.col("flow_rate").is_in(flow_rate_selector.value)
+    )
+    mo.stop(
+        polarisation_filtered_df.is_empty(),
+    )
 
-#     # recalculate time/s from datetime column for each group (study_phase, participant, repetition, flow_rate)
-#     # NOTE: We do this to properly handle multiple files in one experiment folder
-#     polarisation_filtered_df = recalculate_time(polarisation_filtered_df)
-#     return (polarisation_filtered_df,)
+    # recalculate time/s from datetime column for each group (study_phase, participant, repetition, flow_rate)
+    # NOTE: We do this to properly handle multiple files in one experiment folder
+    polarisation_filtered_df = recalculate_time(polarisation_filtered_df)
+    return (polarisation_filtered_df,)
 
 
 # @app.cell
