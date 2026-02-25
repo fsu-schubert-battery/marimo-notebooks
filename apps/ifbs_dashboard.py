@@ -33,7 +33,8 @@ with app.setup:
     # detect WASM runtime (deployed marimo notebook in browser/pyodide)
     # must be defined before conditional imports below
     def is_wasm() -> bool:
-        return "pyodide" in sys.modules
+        return sys.platform == "emscripten"
+
 
     # data handling
     import tempfile
@@ -48,13 +49,12 @@ with app.setup:
     # visualization
     import altair as alt
 
-    try:
-        import vegafusion
-        alt.data_transformers.enable("vegafusion")
-        print("[Import] Using vegafusion data transformer for Altair charts.")
-    except Exception:
+    if is_wasm():
         alt.data_transformers.enable("default")
-        print("[Import] Using default data transformer for Altair charts.")
+        md.version("Vegafusion not available, using default data transformer for Altair charts. ")
+    else:
+        alt.data_transformers.enable("vegafusion")
+        md.version("Using Vegafusion for data transformations in Altair charts")
 
 
 @app.cell(hide_code=True)
