@@ -57,6 +57,19 @@ def _():
     # Isolated in their own cell so that changes to computation helpers
     # do not invalidate the persistent cache for file loading.
 
+    def _ensure_local(file_path: str | Path) -> Path:
+        _path_str = str(file_path)
+        if _path_str.startswith(("http://", "https://")):
+            import urllib.request
+
+            _suffix = Path(_path_str.split("?")[0].split("/")[-1]).suffix
+            _fd = tempfile.NamedTemporaryFile(suffix=_suffix, delete=False)
+            with urllib.request.urlopen(_path_str) as _response:
+                _fd.write(_response.read())
+            _fd.close()
+            return Path(_fd.name)
+        return Path(file_path)
+    
     @mo.persistent_cache
     def load_precomputed_df(name: str) -> pl.DataFrame:
         _relative = f"public/data/{name}.parquet"
@@ -2537,11 +2550,6 @@ def _(
 #         ]
 #     )
 #     return
-
-
-@app.cell
-def _():
-    return
 
 
 if __name__ == "__main__":
