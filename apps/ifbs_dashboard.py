@@ -602,11 +602,15 @@ def _(
     repetition_selector,
     study_phase_selector,
 ):
-    data_structure_df.filter(
-        pl.col("study_phase").is_in([study_phase_selector.value])
-        & pl.col("participant").is_in(participant_selector.value)
-        & pl.col("repetition").is_in(repetition_selector.value)
-        & pl.col("flow_rate").is_in(flow_rate_selector.value)
+    mo.lazy(
+        data_structure_df.filter(
+            pl.col("study_phase").is_in([study_phase_selector.value])
+            & pl.col("participant").is_in(participant_selector.value)
+            & pl.col("repetition").is_in(repetition_selector.value)
+            & pl.col("flow_rate").is_in(flow_rate_selector.value)
+
+        ), show_loading_indicator=True
+
     )
     return
 
@@ -855,25 +859,19 @@ def _(combined_temperature_chart, temperature_data_df):
             """),
             mo.accordion(
                 {
-                    "Data table": temperature_data_df,
-                    # "Data explorer": mo.ui.data_explorer(temperature_data_df),
+                    "Data table": mo.lazy(temperature_data_df, show_loading_indicator=True),
+                    "Data explorer": mo.lazy(mo.ui.data_explorer(temperature_data_df), show_loading_indicator=True),
                 },
                 lazy=True,
                 multiple=True,
             ),
             mo.md("<br>"),
             mo.md("### Participant schedules and temperature over time"),
-            mo.md(
-                f"""
+            mo.md(f"""
                 The plot shows the participant schedules and the temperature data over time. You can use this plot to analyze the temperature behavior during the experiments and identify trends or differences between different time periods. The **average temperature** over the recorded time period was **{temperature_data_df["temperature/°C"].mean():.1f} °C ± {(temperature_data_df["temperature/°C"].std() if len(temperature_data_df) > 1 else 0):.1f} °C** (uncertainty: standard deviation) with a **minimum temperature of {temperature_data_df["temperature/°C"].min()} °C** and **maximum temperature of {temperature_data_df["temperature/°C"].max()} °C**.
-                """
-            )
-            if not temperature_data_df.is_empty()
-            else mo.md(
-                "No temperature data is currently available for the selected study phase."
-            ),
+            """),
             mo.md("<br>"),
-            combined_temperature_chart,
+            mo.lazy(combined_temperature_chart, show_loading_indicator=True),
         ]
     )
     return
@@ -1252,8 +1250,8 @@ def section_impedance_spectroscopy(
             """),
             mo.accordion(
                 {
-                    "Data table": mo.ui.dataframe(eis_filtered_df),
-                    # "Data explorer": mo.ui.data_explorer(eis_filtered_df),
+                    "Data table": mo.lazy(mo.ui.dataframe(eis_filtered_df), show_loading_indicator=True),
+                    # "Data explorer": mo.lazy(mo.ui.data_explorer(eis_filtered_df), show_loading_indicator=True),
                 },
                 lazy=True,
                 multiple=True,
@@ -1264,20 +1262,23 @@ def section_impedance_spectroscopy(
                 These Nyquist plots show the relationship between the real and imaginary parts of the impedance grouped by participant. Each point on the plot corresponds to a specific frequency, and the shape of the plot can provide insights into the electrochemical processes occurring in the system.
             """),
             mo.md("<br>"),
-            nyquist_plots,
+            mo.lazy(nyquist_plots, show_loading_indicator=True),
             mo.md("<br>"),
             mo.md("### Ohmic series resistance (ESR) comparison"),
             mo.md("""
                 These plots compare the extracted ohmic series resistance (ESR) values across participants and repetitions. To keep it simple, the ESR was not fitted via a Randles circuit but simply estimated from the intercept of the Nyquist plots with the Re(Z)-axis. The first plot shows the mean ESR values for each participant with error bars representing the standard deviation across repetitions. The second plot shows the mean ESR values for each repetition with error bars representing the standard deviation across participants. You can use these plots to identify trends or differences in ESR values between participants and repetitions.
             """),
             mo.md("<br>"),
-            mo.hstack(
-                [
-                    series_resistance_per_participant_plot,
-                    series_resistance_per_repetition_plot,
-                ],
-                widths="equal",
-                gap=0,
+            mo.lazy(
+                mo.hstack(
+                    [
+                        series_resistance_per_participant_plot,
+                        series_resistance_per_repetition_plot,
+                    ],
+                    widths="equal",
+                    gap=0,
+                ),
+                show_loading_indicator=True
             ),
             mo.md("<br>"),
         ]
@@ -1792,8 +1793,8 @@ def section_polarisation(
             """),
             mo.accordion(
                 {
-                    "Data table": polarisation_filtered_df,
-                    # "Data explorer": mo.ui.data_explorer(polarisation_filtered_df),
+                    "Data table": mo.lazy(polarisation_filtered_df, show_loading_indicator=True),
+                    # "Data explorer": mo.lazy(mo.ui.data_explorer(polarisation_filtered_df), show_loading_indicator=True),
                 },
                 lazy=True,
                 multiple=True,
@@ -1804,21 +1805,24 @@ def section_polarisation(
                 These plots show the relationship between the current and the overvoltage (i.e., applied voltage - OCV) for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as activation losses, ohmic losses, and mass transport limitations. You can compare the curves across different participants and repetitions to identify trends or differences in the polarisation behavior.
             """),
             mo.md("<br>"),
-            polarisation_plots,
-            polarisation_voltage_current_plots,
+            mo.lazy(polarisation_plots, show_loading_indicator=True),
+            mo.lazy(polarisation_voltage_current_plots, show_loading_indicator=True),
             mo.md("<br>"),
             mo.md("### Polarisation resistance comparison"),
             mo.md(f"""
                 These plots compare the extracted polarisation resistance values across participants and repititions. The polarisation resistance was calculated from the voltage and current values of the polarisation steps by first collecting the median voltage _versus_ median current of the last {step_evaluation_tail_length} points of each polarisation step. Subsequently, a linear regression was performed over the collected data. The first plot shows the mean polarisation resistance values for each participant with error bars representing the standard deviation across all selected repetitions. The second plot shows the mean polarisation resistance values for each repetition with error bars representing the standard deviation across all selected participants. You can use these plots to identify trends or differences in polarisation resistance values between participants and repetitions.
             """),
             mo.md("<br>"),
-            mo.hstack(
-                [
-                    polarisation_resistance_per_participant_plot,
-                    polarisation_resistance_per_repetition_plot,
-                ],
-                widths="equal",
-                gap=0,
+            mo.lazy(
+                mo.hstack(
+                    [
+                        polarisation_resistance_per_participant_plot,
+                        polarisation_resistance_per_repetition_plot,
+                    ],
+                    widths="equal",
+                    gap=0,
+                ),
+                show_loading_indicator=True,
             ),
             mo.md("<br>"),
         ]
@@ -2557,8 +2561,8 @@ def section_charge_discharge_cycling(
             """),
             mo.accordion(
                 {
-                    "Data table": cd_cycling_filtered_df,
-                    # "Data explorer": mo.ui.data_explorer(cd_cycling_filtered_df),
+                    "Data table": mo.lazy(cd_cycling_filtered_df, show_loading_indicator=True),
+                    # "Data explorer": mo.lazy(mo.ui.data_explorer(cd_cycling_filtered_df), show_loading_indicator=True),
                 },
                 lazy=True,
                 multiple=True,
@@ -2568,12 +2572,15 @@ def section_charge_discharge_cycling(
             mo.md("""
                 These plots show the relationship between the voltage and the capacity for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as the presence of different plateaus corresponding to different electrochemical reactions, changes in internal resistance, and capacity fade over cycles. You can compare the curves across different participants and repetitions to identify trends or differences in the charge-discharge behavior. Use the slider to select the cycle to display.
             """),
-            mo.vstack(
-                [
-                    mo.md("**Select cycle:**"),
-                    slider_half_cycle,
-                    cd_cycling_charts,
-                ]
+            mo.lazy(
+                mo.vstack(
+                    [
+                        mo.md("**Select cycle:**"),
+                        slider_half_cycle,
+                        cd_cycling_charts,
+                    ]
+                ),
+                show_loading_indicator=True,
             ),
             mo.md("<br>"),
             mo.md("### Capacity distribution per participant and repetition"),
@@ -2581,11 +2588,14 @@ def section_charge_discharge_cycling(
                 These plots show the distribution of capacity values across all cycles for each participant and repetition, respectively. The boxplots display the median, interquartile range, and outliers of the capacity values, allowing you to compare the capacity distributions between participants and repetitions and identify trends or differences in the capacity performance. The average **initial (discharge) capacity** over the selected dataset ({len(cd_cycling_initial_discharge_capacity)} experiments) is **{cd_cycling_initial_discharge_capacity["capacity/mAh"].mean():.1f} mAh ± {(cd_cycling_initial_discharge_capacity["capacity/mAh"].std() if len(cd_cycling_initial_discharge_capacity) > 1 else 0):.1f} mAh** (uncertainty: standard deviation), which represents an average **capacity utilization of {(cd_cycling_initial_discharge_capacity["capacity/mAh"].mean() / theoretical_capacity_mAh):.1%}** with respect to the theoretical capacity as per the protocol defined electrolyte composition (0.2 M redox-active species).
             """),
             mo.md("<br>"),
-            mo.hstack(
-                [
-                    cd_cycling_capacity_participant,
-                    cd_cycling_capacity_repetition,
-                ]
+            mo.lazy(
+                mo.hstack(
+                    [
+                        cd_cycling_capacity_participant,
+                        cd_cycling_capacity_repetition,
+                    ]
+                ),
+                show_loading_indicator=True,
             ),
             mo.md("<br>"),
             mo.md("### Capacity fade"),
@@ -2593,9 +2603,9 @@ def section_charge_discharge_cycling(
                 These plots show the capacity retention over cycles and time for each selected file. The first plot shows the capacity at the end of each half cycle (i.e., after each charge and discharge step, respectively) over the cycle number, while the second plot shows the capacity over time. You can use these plots to analyze the capacity fade behavior of the system and identify trends or differences between participants and repetitions.
             """),
             mo.md("<br>"),
-            cd_cycling_capacity_cycle_chart,
+            mo.lazy(cd_cycling_capacity_cycle_chart, show_loading_indicator=True),
             mo.md("<br>"),
-            cd_cycling_capacity_time_chart,
+            mo.lazy(cd_cycling_capacity_time_chart, show_loading_indicator=True),
             mo.md("<br>"),
         ]
     )
