@@ -268,7 +268,25 @@ def build_cd_cycling_flat_df(data_structure_df: pl.DataFrame) -> pl.DataFrame:
             )
         )
 
-    return pl.concat(frames, how="vertical_relaxed") if frames else pl.DataFrame()
+    if not frames:
+        return pl.DataFrame()
+
+    flat_df = pl.concat(frames, how="vertical_relaxed")
+
+    # pre-compute derived columns (capacity, dQ/dV) so the dashboard
+    # doesn't have to recompute them on every filter change
+    _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
+    flat_df = flat_df.with_columns(
+        pl.col("Q charge/discharge/mA.h").alias("capacity/mAh"),
+        (
+            pl.col("Q charge/discharge/mA.h").diff().over(_meta_cols)
+            / pl.col("voltage/V").diff().over(_meta_cols)
+        ).alias("_dQ_dV_raw"),
+    ).with_columns(
+        pl.col("_dQ_dV_raw").rolling_median(25).over(_meta_cols).alias("dQ/dV"),
+    ).drop("_dQ_dV_raw")
+
+    return flat_df
 
 
 def build_temperature_data_df(data_dir: Path) -> pl.DataFrame:

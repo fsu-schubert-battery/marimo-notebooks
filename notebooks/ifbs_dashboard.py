@@ -1227,12 +1227,7 @@ def esr_per_repetition(series_resistance_df):
 
 
 @app.cell
-def section_impedance_spectroscopy(
-    eis_filtered_df,
-    nyquist_plots,
-    series_resistance_per_participant_plot,
-    series_resistance_per_repetition_plot,
-):
+def section_impedance_spectroscopy(eis_filtered_df):
     # IMPEDANCE SPECTROSCOPY EVALUATION
     # STEP 4: Display the content of the section and explain what it does
 
@@ -1250,20 +1245,43 @@ def section_impedance_spectroscopy(
             """),
             mo.accordion(
                 {
-                    "Data table": mo.ui.dataframe(eis_filtered_df),
-                    # "Data explorer": mo.ui.data_explorer(eis_filtered_df),
+                    "Data table": eis_filtered_df,
+                    "Data explorer": mo.ui.data_explorer(eis_filtered_df),
                 },
                 lazy=True,
                 multiple=True,
             ),
-            mo.md("<br>"),
+
+        ]
+    )
+    return
+
+
+@app.cell
+def _(nyquist_plots):
+    # display section content
+    mo.vstack(
+        [
             mo.md("### Nyquist plots"),
             mo.md("""
                 These Nyquist plots show the relationship between the real and imaginary parts of the impedance grouped by participant. Each point on the plot corresponds to a specific frequency, and the shape of the plot can provide insights into the electrochemical processes occurring in the system.
             """),
             mo.md("<br>"),
             mo.lazy(nyquist_plots, show_loading_indicator=True),
-            mo.md("<br>"),
+
+        ]
+    )
+    return
+
+
+@app.cell
+def _(
+    series_resistance_per_participant_plot,
+    series_resistance_per_repetition_plot,
+):
+    # display section content
+    mo.vstack(
+        [
             mo.md("### Ohmic series resistance (ESR) comparison"),
             mo.md("""
                 These plots compare the extracted ohmic series resistance (ESR) values across participants and repetitions. To keep it simple, the ESR was not fitted via a Randles circuit but simply estimated from the intercept of the Nyquist plots with the Re(Z)-axis. The first plot shows the mean ESR values for each participant with error bars representing the standard deviation across repetitions. The second plot shows the mean ESR values for each repetition with error bars representing the standard deviation across participants. You can use these plots to identify trends or differences in ESR values between participants and repetitions.
@@ -1779,14 +1797,7 @@ def _(polarisation_resistance_df):
 
 
 @app.cell
-def section_polarisation(
-    polarisation_filtered_df,
-    polarisation_plots,
-    polarisation_resistance_per_participant_plot,
-    polarisation_resistance_per_repetition_plot,
-    polarisation_voltage_current_plots,
-    step_evaluation_tail_length,
-):
+def section_polarisation(polarisation_filtered_df):
     # display section content
     mo.vstack(
         [
@@ -1806,8 +1817,16 @@ def section_polarisation(
                 },
                 lazy=True,
                 multiple=True,
-            ),
-            mo.md("<br>"),
+            ),     
+        ]
+    )
+    return
+
+
+@app.cell
+def _(polarisation_plots, polarisation_voltage_current_plots):
+    mo.vstack(
+        [
             mo.md("### Current-overvoltage curves"),
             mo.md("""
                 These plots show the relationship between the current and the overvoltage (i.e., applied voltage - OCV) for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as activation losses, ohmic losses, and mass transport limitations. You can compare the curves across different participants and repetitions to identify trends or differences in the polarisation behavior.
@@ -1815,7 +1834,20 @@ def section_polarisation(
             mo.md("<br>"),
             mo.lazy(polarisation_plots, show_loading_indicator=True),
             mo.lazy(polarisation_voltage_current_plots, show_loading_indicator=True),
-            mo.md("<br>"),
+
+        ]
+    )
+    return
+
+
+@app.cell
+def _(
+    polarisation_resistance_per_participant_plot,
+    polarisation_resistance_per_repetition_plot,
+    step_evaluation_tail_length,
+):
+    mo.vstack(
+        [
             mo.md("### Polarisation resistance comparison"),
             mo.md(f"""
                 These plots compare the extracted polarisation resistance values across participants and repititions. The polarisation resistance was calculated from the voltage and current values of the polarisation steps by first collecting the median voltage _versus_ median current of the last {step_evaluation_tail_length} points of each polarisation step. Subsequently, a linear regression was performed over the collected data. The first plot shows the mean polarisation resistance values for each participant with error bars representing the standard deviation across all selected repetitions. The second plot shows the mean polarisation resistance values for each repetition with error bars representing the standard deviation across all selected participants. You can use these plots to identify trends or differences in polarisation resistance values between participants and repetitions.
@@ -1866,22 +1898,10 @@ def _(
 def _(cd_cycling_filtered_df):
     # CHARGE-DISCHARGE CYCLING EVALUATION
     # STEP 2a: Prepare dataframes for the voltage-capacity as well as voltage-dQ/dV curves from the charge-discharge cycling data
+    # NOTE: capacity/mAh and dQ/dV are precomputed in precompute_ifbs.py
 
-    # compute derived columns using .over() to keep per-file semantics
     _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
-    # Step 1: compute diff-based columns within each file group
-    _cd_with_diffs = cd_cycling_filtered_df.with_columns(
-        pl.col("time/s").diff().over(_meta_cols).alias("dt/s"),
-        pl.col("Q charge/discharge/mA.h").alias("capacity/mAh"),
-        (
-            pl.col("Q charge/discharge/mA.h").diff().over(_meta_cols)
-            / pl.col("voltage/V").diff().over(_meta_cols)
-        ).alias("_dQ_dV_raw"),
-    )
-    # Step 2: smooth dQ/dV with rolling median within each file group
-    df_filtered_cd_cycling_data = _cd_with_diffs.with_columns(
-        pl.col("_dQ_dV_raw").rolling_median(25).over(_meta_cols).alias("dQ/dV"),
-    ).select(
+    df_filtered_cd_cycling_data = cd_cycling_filtered_df.select(
         [
             *_meta_cols,
             "half cycle",
@@ -1937,7 +1957,6 @@ def _(cd_cycling_filtered_df):
 @app.cell
 def _(
     df_filtered_cd_cycling_chart_data,
-    df_filtered_cd_cycling_data,
     slider_half_cycle,
     wheel_zoom_x,
     wheel_zoom_xy,
@@ -1961,7 +1980,7 @@ def _(
     # compute per-axis data ranges, then build domains with some padding
     _all_voltage = _cd_cycling_capacity_voltage_data["voltage/V"]
     _voltage_domain = [_all_voltage.min(), _all_voltage.max()]
-    _dqdv_domain = [0, df_filtered_cd_cycling_data["dQ/dV"].max()]
+    _dqdv_domain = [0, df_filtered_cd_cycling_chart_data["dQ/dV"].max()]
 
     # build a plot of voltage vs. capacity for the selected cycle
     cd_cycling_capacity_voltage = (
@@ -2544,18 +2563,9 @@ def _(cd_cycling_filtered_cycle_data):
     return (cd_cycling_capacity_repetition,)
 
 
+
 @app.cell
-def section_charge_discharge_cycling(
-    cd_cycling_capacity_cycle_chart,
-    cd_cycling_capacity_participant,
-    cd_cycling_capacity_repetition,
-    cd_cycling_capacity_time_chart,
-    cd_cycling_charts,
-    cd_cycling_filtered_df,
-    cd_cycling_initial_discharge_capacity,
-    slider_half_cycle,
-    theoretical_capacity_mAh,
-):
+def section_charge_discharge_cycling(cd_cycling_filtered_df):
     mo.vstack(
         [
             mo.md("## Charge-Discharge Cycling"),
@@ -2575,22 +2585,40 @@ def section_charge_discharge_cycling(
                 lazy=True,
                 multiple=True,
             ),
-            mo.md("<br>"),
+                ]
+    )
+    return
+
+
+@app.cell
+def _(cd_cycling_charts, slider_half_cycle):
+    mo.vstack(
+        [
             mo.md("### Voltage-capacity data"),
             mo.md("""
                 These plots show the relationship between the voltage and the capacity for each selected file. The shape of the curves can provide insights into the electrochemical processes occurring in the system, such as the presence of different plateaus corresponding to different electrochemical reactions, changes in internal resistance, and capacity fade over cycles. You can compare the curves across different participants and repetitions to identify trends or differences in the charge-discharge behavior. Use the slider to select the cycle to display.
             """),
-            mo.lazy(
-                mo.vstack(
-                    [
-                        mo.md("**Select cycle:**"),
-                        slider_half_cycle,
-                        cd_cycling_charts,
-                    ]
-                ),
-                show_loading_indicator=True,
+            mo.vstack(
+                [
+                    mo.md("**Select cycle:**"),
+                    slider_half_cycle,
+                    cd_cycling_charts,
+                ]
             ),
-            mo.md("<br>"),
+        ]
+    )
+    return
+
+
+@app.cell
+def _(
+    cd_cycling_capacity_participant,
+    cd_cycling_capacity_repetition,
+    cd_cycling_initial_discharge_capacity,
+    theoretical_capacity_mAh,
+):
+    mo.vstack(
+        [
             mo.md("### Capacity distribution per participant and repetition"),
             mo.md(f"""
                 These plots show the distribution of capacity values across all cycles for each participant and repetition, respectively. The boxplots display the median, interquartile range, and outliers of the capacity values, allowing you to compare the capacity distributions between participants and repetitions and identify trends or differences in the capacity performance. The average **initial (discharge) capacity** over the selected dataset ({len(cd_cycling_initial_discharge_capacity)} experiments) is **{cd_cycling_initial_discharge_capacity["capacity/mAh"].mean():.1f} mAh ± {(cd_cycling_initial_discharge_capacity["capacity/mAh"].std() if len(cd_cycling_initial_discharge_capacity) > 1 else 0):.1f} mAh** (uncertainty: standard deviation), which represents an average **capacity utilization of {(cd_cycling_initial_discharge_capacity["capacity/mAh"].mean() / theoretical_capacity_mAh):.1%}** with respect to the theoretical capacity as per the protocol defined electrolyte composition (0.2 M redox-active species).
@@ -2605,7 +2633,15 @@ def section_charge_discharge_cycling(
                 ),
                 show_loading_indicator=True,
             ),
-            mo.md("<br>"),
+        ]
+    )
+    return
+
+
+@app.cell
+def _(cd_cycling_capacity_cycle_chart, cd_cycling_capacity_time_chart):
+    mo.vstack(
+        [
             mo.md("### Capacity fade"),
             mo.md("""
                 These plots show the capacity retention over cycles and time for each selected file. The first plot shows the capacity at the end of each half cycle (i.e., after each charge and discharge step, respectively) over the cycle number, while the second plot shows the capacity over time. You can use these plots to analyze the capacity fade behavior of the system and identify trends or differences between participants and repetitions.
