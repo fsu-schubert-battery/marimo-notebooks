@@ -1898,7 +1898,7 @@ def _(
 def _(cd_cycling_filtered_df):
     # CHARGE-DISCHARGE CYCLING EVALUATION
     # STEP 2a: Prepare dataframes for the voltage-capacity as well as voltage-dQ/dV curves from the charge-discharge cycling data
-    # NOTE: capacity/mAh and dQ/dV are precomputed in precompute_ifbs.py
+    # NOTE: capacity/mAh and dQ/dV are precomputed in precompute.py
 
     _meta_cols = ["study_phase", "participant", "repetition", "flow_rate"]
     df_filtered_cd_cycling_data = cd_cycling_filtered_df.select(

@@ -5,7 +5,7 @@ on:
     branches: ["main"]
     paths:
       - '.github/workflows/precompute.yml'
-      - '.github/scripts/precompute_ifbs.py'
+      - '.github/scripts/precompute.py'
       - 'apps/ifbs_dashboard.py'
       - 'apps/public/data/**'
       - '!apps/public/data/*.parquet'
@@ -39,7 +39,7 @@ jobs:
           PY
 
       - name: 🛠️ Precompute parquet
-        run: uv run .github/scripts/precompute_ifbs.py
+        run: uv run .github/scripts/precompute.py
 
       - name: 📦 Commit updated parquet
         run: |
