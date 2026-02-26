@@ -617,31 +617,37 @@ def _(
 
 @app.cell
 def _(load_precomputed_df, study_phase_selector):
-    # PARTICIPANT SCHEDULES & TEMPERATURE DATA EVALUATION
-    # STEP 1: Load the temperature data from the file and prepare it for visualization
+    # LOAD ALL PRECOMPUTED DATAFRAMES
 
-    temperature_data_df = (
-        load_precomputed_df("temperature_data_df")
-        .filter(pl.col("study_phase") == study_phase_selector.value)
-        .select(
-            pl.col("datetime").cast(pl.Datetime),
-            pl.col("time/s").cast(pl.Float64),
-            pl.col("temperature/°C").cast(pl.Float64),
+    with mo.status.progress_bar(
+        total=4,
+        title="Loading data",
+        subtitle="Starting…",
+        completion_title="Loading data",
+        completion_subtitle="All datasets loaded",
+        remove_on_exit=True,
+    ) as bar:
+        temperature_data_df = (
+            load_precomputed_df("temperature_data_df")
+            .filter(pl.col("study_phase") == study_phase_selector.value)
+            .select(
+                pl.col("datetime").cast(pl.Datetime),
+                pl.col("time/s").cast(pl.Float64),
+                pl.col("temperature/°C").cast(pl.Float64),
+            )
         )
-    )
-    
-    return (temperature_data_df,)
+        bar.update(subtitle="Temperature data loaded")
 
+        eis_flat_df = load_precomputed_df("eis_flat_df")
+        bar.update(subtitle="EIS data loaded")
 
-@app.cell
-def _(load_precomputed_df):
-    # LOAD DATA FROM PRECOMPUTED DATAFRAMES
+        polarisation_flat_df = load_precomputed_df("polarisation_flat_df")
+        bar.update(subtitle="Polarisation data loaded")
 
-    eis_flat_df = load_precomputed_df("eis_flat_df")
-    polarisation_flat_df = load_precomputed_df("polarisation_flat_df")
-    cd_cycling_flat_df = load_precomputed_df("cd_cycling_flat_df")
-    
-    return (eis_flat_df, polarisation_flat_df, cd_cycling_flat_df,)
+        cd_cycling_flat_df = load_precomputed_df("cd_cycling_flat_df")
+        bar.update(subtitle="Charge-discharge data loaded")
+
+    return (temperature_data_df, eis_flat_df, polarisation_flat_df, cd_cycling_flat_df,)
 
 
 @app.cell
